@@ -20,6 +20,7 @@ add_library(cudaLib OBJECT ray.cu ray.cuh)
 
 # Pour générer des PTX au lieu de OBJ (PTX = fichier bytecode intermédiaire OptiX)
 set_property(TARGET cudaLib PROPERTY CUDA_PTX_COMPILATION ON)
+set_property(TARGET cudaLib PROPERTY CUDA_STANDARD 14)
 target_link_libraries(${EXE} ${CUDA_LIBRARIES})
 
 # Le PTX est un fichier texte qu'il faudra lire

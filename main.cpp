@@ -7,6 +7,7 @@
 #include <optix_stubs.h>
 #include <optix_function_table_definition.h> // Nécessaire sinon erreur de link g_optixFunctionTable
 #include "ray.cuh"
+#include "Record.hpp"
 
 std::string readAllFile(const char *path)
 {
@@ -15,24 +16,6 @@ std::string readAllFile(const char *path)
     std::ifstream ifs(path);
     std::string content{(iterator(ifs)), iterator()};
     return content;
-}
-
-void CUDA_CHECK(cudaError_t result)
-{
-    if(result != cudaSuccess)
-    {
-        std::cerr << "CUDA error: " << cudaGetErrorString(result) << std::endl;
-        exit(1);
-    }
-}
-
-void OPTIX_CHECK(OptixResult result)
-{
-    if(result != OPTIX_SUCCESS)
-    {
-        std::cerr << "OptiX error: " << optixGetErrorString(result) << std::endl;
-        exit(1);
-    }
 }
 
 void initCuda()
@@ -65,7 +48,7 @@ OptixModule createModule(OptixDeviceContext context)
     pipelineCompileOptions.traversableGraphFlags = OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_LEVEL_INSTANCING;
     pipelineCompileOptions.numPayloadValues = 2;
     pipelineCompileOptions.numAttributeValues = 2;
-    pipelineCompileOptions.exceptionFlags = OPTIX_EXCEPTION_FLAG_NONE;
+    pipelineCompileOptions.exceptionFlags = OPTIX_EXCEPTION_FLAG_DEBUG; // _NONE en release
     pipelineCompileOptions.pipelineLaunchParamsVariableName = "params";
     pipelineCompileOptions.usesPrimitiveTypeFlags = 0;
 
@@ -95,14 +78,20 @@ OptixModule createModule(OptixDeviceContext context)
     return module;
 }
 
-OptixProgramGroup createProgramGroup(OptixDeviceContext context, OptixModule module)
+std::vector<OptixProgramGroup> createProgramGroup(
+    OptixDeviceContext context,
+    OptixModule module)
 {
-    OptixProgramGroupDesc pgDesc = {};
-    pgDesc.kind = OPTIX_PROGRAM_GROUP_KIND_RAYGEN;
-    pgDesc.raygen.entryFunctionName = "__raygen__my_program";
-    pgDesc.raygen.module = module;
+    const size_t nb_programs = 3;
+    OptixProgramGroupDesc pgDesc[nb_programs] = {};
+    pgDesc[0].kind = OPTIX_PROGRAM_GROUP_KIND_RAYGEN;
+    pgDesc[0].raygen.entryFunctionName = "__raygen__my_program";
+    pgDesc[0].raygen.module = module;
+    
+    pgDesc[1].kind = OPTIX_PROGRAM_GROUP_KIND_HITGROUP;
+    pgDesc[2].kind = OPTIX_PROGRAM_GROUP_KIND_MISS;
 
-    OptixProgramGroup group = nullptr;
+    std::vector<OptixProgramGroup> groups(nb_programs, nullptr);
 
     {
         size_t logStringSize = 2000;
@@ -111,11 +100,11 @@ OptixProgramGroup createProgramGroup(OptixDeviceContext context, OptixModule mod
         OptixProgramGroupOptions pgOptions = {};
         const OptixResult result = optixProgramGroupCreate(
             context,
-            &pgDesc,
-            1,
+            &pgDesc[0],
+            nb_programs,
             &pgOptions,
             logString.data(), &logStringSize,
-            &group
+            groups.data()
         );
 
         if(result != OPTIX_SUCCESS)
@@ -126,10 +115,11 @@ OptixProgramGroup createProgramGroup(OptixDeviceContext context, OptixModule mod
         OPTIX_CHECK(result);
     }
 
-    return group;
+    return groups;
 }
 
-OptixPipeline createPipeline(OptixDeviceContext context, OptixProgramGroup programGroup)
+OptixPipeline createPipeline(OptixDeviceContext context,
+    const std::vector<OptixProgramGroup> &programGroup)
 {
     OptixPipeline pipeline = nullptr;
     OptixPipelineLinkOptions pipelineLinkOptions = {};
@@ -142,7 +132,7 @@ OptixPipeline createPipeline(OptixDeviceContext context, OptixProgramGroup progr
     pipelineCompileOptions.traversableGraphFlags = OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_LEVEL_INSTANCING;
     pipelineCompileOptions.numPayloadValues = 2;
     pipelineCompileOptions.numAttributeValues = 2;
-    pipelineCompileOptions.exceptionFlags = OPTIX_EXCEPTION_FLAG_NONE;
+    pipelineCompileOptions.exceptionFlags = OPTIX_EXCEPTION_FLAG_DEBUG;
     pipelineCompileOptions.pipelineLaunchParamsVariableName = "params";
     pipelineCompileOptions.usesPrimitiveTypeFlags = 0;
 
@@ -156,8 +146,8 @@ OptixPipeline createPipeline(OptixDeviceContext context, OptixProgramGroup progr
             context,
             &pipelineCompileOptions,
             &pipelineLinkOptions,
-            &programGroup,
-            1,
+            programGroup.data(),
+            static_cast<unsigned int>(programGroup.size()),
             logString.data(), &logStringSize,
             &pipeline
         );
@@ -188,6 +178,22 @@ OptixDeviceContext createContext()
     return context;
 }
 
+void printResult(const Params &params)
+{
+    printf("hello?\n");
+
+    std::vector<uchar4> image(params.width * params.height);
+
+    CUDA_CHECK(cudaMemcpy(image.data(),
+        params.image, image.size() * sizeof(image[0]),
+        cudaMemcpyDeviceToHost)
+    );
+
+    uchar4 px = image[0];
+    uint4 u = make_uint4(px.x, px.y, px.z, px.w);
+    printf("%d, %d, %d, %d\n", u.x, u.y, u.z, u.w);
+}
+
 int main(int argc, char **argv)
 {
     initCuda();
@@ -196,29 +202,77 @@ int main(int argc, char **argv)
     OptixDeviceContext context = createContext();
 
     OptixModule module = createModule(context);
-    OptixProgramGroup group = createProgramGroup(context, module);
-    OptixPipeline pipeline = createPipeline(context, group);
+    std::vector<OptixProgramGroup> groups = createProgramGroup(context,
+        module);
 
-    OPTIX_CHECK(optixPipelineDestroy(pipeline));
-    OPTIX_CHECK(optixProgramGroupDestroy(group));
-    OPTIX_CHECK(optixModuleDestroy(module));
-    OPTIX_CHECK(optixDeviceContextDestroy(context));
+    OptixProgramGroup raygenGroup = groups[0];
+
+    OptixPipeline pipeline = createPipeline(context, groups);
 
     CUstream stream = nullptr;
     CUDA_CHECK(cudaStreamCreate(&stream));
 
-    CUdeviceptr raygenRecord;
-    void *d_pipelineParams = nullptr;
-    CUDA_CHECK(cudaMalloc(&d_pipelineParams, sizeof(Params)));
+    Params params = {};
+    params.width = 100;
+    params.height = 100;
     
+    CUDA_CHECK(cudaMalloc(
+        &params.image,
+        sizeof(*params.image) * params.width * params.height
+    ));
 
-    unsigned int width = 100;
-    unsigned int height = 100;
-    unsigned int depth = 1;
+    const unsigned int depth = 1;
+
+    // Copy params sur le GPU
+    CUdeviceptr d_params = 0;
+    CUDA_CHECK(cudaMalloc(
+        &reinterpret_cast<void*>(d_params),
+        sizeof(Params))
+    );
+
+    CUDA_CHECK(cudaMemcpy(
+        reinterpret_cast<void*> (d_params),
+        &params,
+        sizeof(Params),
+        cudaMemcpyHostToDevice)
+    );
+
+    Record<void*> raygenRecord(raygenGroup);
+    raygenRecord.copyToDevice();
+
+    Record<void*> missRecord(raygenGroup);
+    missRecord.copyToDevice();
+    
+    // définir au minimum le raygenRecord et le missRecord
     OptixShaderBindingTable sbt = {};
-    sbt.raygenRecord = raygenRecord;
+    sbt.raygenRecord = raygenRecord.getDevicePtr();
+    sbt.missRecordBase = missRecord.getDevicePtr();
+    sbt.missRecordStrideInBytes = sizeof(missRecord);
+    sbt.missRecordCount = 1;
 
-    CUDA_CHECK(cudaFree(d_pipelineParams));
+    OPTIX_CHECK(optixLaunch(
+        pipeline,
+        stream,
+        d_params,
+        sizeof(Params),
+        &sbt,
+        params.width, params.height, depth
+    ));
+
+    CUDA_CHECK(cudaFree(reinterpret_cast<void*>(d_params)));
+
+    OPTIX_CHECK(optixPipelineDestroy(pipeline));
+
+    for(OptixProgramGroup group : groups) {
+        OPTIX_CHECK(optixProgramGroupDestroy(group));
+    }
+    printResult(params);
+
+    OPTIX_CHECK(optixModuleDestroy(module));
+    OPTIX_CHECK(optixDeviceContextDestroy(context));
     CUDA_CHECK(cudaStreamDestroy(stream));
+
+    CUDA_CHECK(cudaFree(params.image));
+
     return EXIT_SUCCESS;
 }
