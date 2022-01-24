@@ -3,8 +3,16 @@ cmake_minimum_required(VERSION 3.1 FATAL_ERROR)
 project(TestOptiX LANGUAGES CXX CUDA)
 set(EXE ${PROJECT_NAME})
 
+add_definitions(-DNOMINMAX) # évite une erreur de compilation sur windows
+
+set(CMAKE_CUDA_ARCHITECTURES 61-virtual) # -virtual pour éviter une erreur de compilation
+set(CMAKE_CXX_STANDARD 17)
+
 set(MY_PTX_PATH ${CMAKE_BINARY_DIR}/cudaLib.dir/Debug/ray.ptx)
 add_compile_definitions(MY_PTX_PATH=\"${MY_PTX_PATH}\")
+
+# .ply parser
+add_subdirectory(thirdparty/tinyply)
 
 message(STATUS ".ptx path: ${MY_PTX_PATH}")
 
@@ -12,7 +20,13 @@ include_directories("C:/ProgramData/NVIDIA Corporation/OptiX SDK 7.4.0/include")
 #list(APPEND CMAKE_MODULE_PATH "C:/ProgramData/NVIDIA Corporation/OptiX SDK 7.4.0/SDK/CMake")
 #find_package(OptiX REQUIRED)
 
-add_executable(${EXE} main.cpp)
+# Fichiers sources du projet
+list(APPEND SRC main.cpp stb.cpp Application.cpp Application.h ray.cuh common.hpp common.cpp
+    SimpleGLRect.cpp SimpleGLRect.hpp OpenGL.hpp PointsCloud.cpp PointsCloud.hpp)
+
+include_directories(.)
+
+add_executable(${EXE} ${SRC})
 
 find_package(CUDA REQUIRED)
 
@@ -23,6 +37,28 @@ set_property(TARGET cudaLib PROPERTY CUDA_PTX_COMPILATION ON)
 set_property(TARGET cudaLib PROPERTY CUDA_STANDARD 14)
 target_link_libraries(${EXE} ${CUDA_LIBRARIES})
 
+set_property(TARGET ${EXE} PROPERTY CUDA_STANDARD 14)
+
 # Le PTX est un fichier texte qu'il faudra lire
 # On définit la macro MY_PTX_PATH qui contient le chemin
 get_target_property(PTX_DIR cudaLib BINARY_DIR)
+
+# ---------------------------- Télécharge, compile et link GLFW automatiquement
+
+include(FetchContent)
+
+# -- Désactive certaines options pour compiler GLFW plus rapidement
+set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+
+# OpenGL wrapper
+add_subdirectory(thirdparty/glad)
+
+ # GLFW v3.3.6: Pour les fenêtres
+add_subdirectory(thirdparty/glfw) # Avant ImGUI car ImGUI dépend de GLFW
+
+# ImGUI v1.86: Pour l'interface
+add_subdirectory(thirdparty/imgui)
+
+target_link_libraries(${EXE} imgui glfw glad tinyply)
