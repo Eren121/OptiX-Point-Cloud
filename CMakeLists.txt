@@ -22,7 +22,7 @@ include_directories("C:/ProgramData/NVIDIA Corporation/OptiX SDK 7.4.0/include")
 
 # Fichiers sources du projet
 list(APPEND SRC main.cpp stb.cpp Application.cpp Application.h ray.cuh common.hpp common.cpp
-    SimpleGLRect.cpp SimpleGLRect.hpp OpenGL.hpp PointsCloud.cpp PointsCloud.hpp)
+    SimpleGLRect.cpp SimpleGLRect.hpp OpenGL.hpp PointsCloud.cpp PointsCloud.hpp Camera.hpp OrbitalControls.cpp OrbitalControls.hpp)
 
 include_directories(.)
 
@@ -31,6 +31,7 @@ add_executable(${EXE} ${SRC})
 find_package(CUDA REQUIRED)
 
 add_library(cudaLib OBJECT ray.cu ray.cuh)
+target_link_libraries(cudaLib ${CUDA_LIBRARIES})
 
 # Pour générer des PTX au lieu de OBJ (PTX = fichier bytecode intermédiaire OptiX)
 set_property(TARGET cudaLib PROPERTY CUDA_PTX_COMPILATION ON)
@@ -42,6 +43,10 @@ set_property(TARGET ${EXE} PROPERTY CUDA_STANDARD 14)
 # Le PTX est un fichier texte qu'il faudra lire
 # On définit la macro MY_PTX_PATH qui contient le chemin
 get_target_property(PTX_DIR cudaLib BINARY_DIR)
+
+target_compile_definitions(${EXE} PRIVATE _USE_MATH_DEFINES)
+
+target_compile_definitions(cudaLib PRIVATE _USE_MATH_DEFINES)
 
 # ---------------------------- Télécharge, compile et link GLFW automatiquement
 

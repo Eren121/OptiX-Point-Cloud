@@ -13,6 +13,7 @@
 #include "imgui.h"
 #include "PointsCloud.hpp"
 #include "SimpleGLRect.hpp"
+#include "OrbitalControls.hpp"
 
 std::unique_ptr<PointsCloud> points;
 
@@ -73,7 +74,10 @@ const OptixPipelineCompileOptions* getPipelineCompileOptions()
     pipelineCompileOptions.numPayloadValues = 3;
 
     // Pour les intersections
-    pipelineCompileOptions.numAttributeValues = 0;
+    // Pour notre programme d'intersection de sphères,
+    // on utilise 4 attributs pour la position (x, y, z) de collision
+    // et l'index de la sphère
+    pipelineCompileOptions.numAttributeValues = 4;
 
     pipelineCompileOptions.pipelineLaunchParamsVariableName = "params";
 
@@ -171,7 +175,7 @@ OptixPipeline createPipeline(OptixDeviceContext context,
 {
     OptixPipeline pipeline = nullptr;
     OptixPipelineLinkOptions pipelineLinkOptions = {};
-    pipelineLinkOptions.maxTraceDepth = 1;
+    pipelineLinkOptions.maxTraceDepth = 3;
     pipelineLinkOptions.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
 
     OptixProgramGroupOptions pgOptions = {};
@@ -443,9 +447,9 @@ TraversableHandleStorage createAccelerationStructure(OptixDeviceContext context,
 
 int main(int argc, char **argv)
 {
-    const char* path = R"(C:/Users/Raphael/Documents/RT1001_ProjetOptiX/data/bunny/reconstruction/bun_zipper.ply)";
+    const char* path = R"(../data/bunny/reconstruction/bun_zipper.ply)";
     points = std::make_unique<PointsCloud>(path);
-
+    points->randomizeColors();
     // ====== Initialisation ======
 
     initCuda();
@@ -533,10 +537,39 @@ int main(int argc, char **argv)
 
 
             
-        Params params = {};
+        static OrbitalControls orbitalControls(make_float3(0.0f, 0.0f, 0.0f), 100.0f);
+
+        // static pour permettre d'être utilisé dans les callbacks GLFW pour les inputs
+        static Params params = {};
+
+        params.camera.origin.z = 300;
         params.width = width;
         params.height = height;
         params.traversableHandle = traversableHandleStorage.handle;
+
+        glfwSetScrollCallback(app.getWindow(), [](GLFWwindow*, double xoffset, double yoffset) {
+            printf("%lf/%lf\n", xoffset, yoffset);
+            orbitalControls.cameraDistanceToTarget *= (1.0f + yoffset * 0.1f);
+        });
+
+        glfwSetCursorPosCallback(app.getWindow(), [](GLFWwindow* window, double xpos, double ypos) {
+            
+            // Déplacer uniquement si le bouton gauche est cliqué
+            if( glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS)
+            {
+                const float speed = 0.02f;
+                
+                static float2 previousPos = make_float2(xpos, ypos);
+                const float2 currentPos = make_float2(xpos, ypos);
+
+                const float2 deltaPos = currentPos - previousPos;
+
+                orbitalControls.horizontalAngle += -deltaPos.x * speed;
+                orbitalControls.verticalAngle += -deltaPos.y * speed;
+
+                previousPos = currentPos;
+            }
+        });
 
         app.onDraw = [&]() {
 
@@ -560,6 +593,7 @@ int main(int argc, char **argv)
 
             const unsigned int depth = 1;
 
+            orbitalControls.applyToCamera(params.camera, my::radians(70.0f), static_cast<float>(width) / height);
             params.image = reinterpret_cast<uchar3*>(d_image);
             
             // Copier params sur le GPU
@@ -606,6 +640,31 @@ int main(int argc, char **argv)
 
             if(ImGui::Begin("Interface", &showInterface))
             {
+                if(ImGui::CollapsingHeader("Camera"))
+                {   
+                    // éviter d'être complètement à la verticale (+/- 180°),
+                    // sinon le produit vectoriel avec worldUp sera toujours nul
+                    // et donc il y aura un "gap" dans l'affichage et la caméra
+                    // sera orientée n'importe comment
+                    const float pitchLimit = (my::pi / 2.0f - 0.001f);
+
+                    ImGui::SliderFloat("theta", &orbitalControls.horizontalAngle, -my::pi, my::pi);
+                    ImGui::SliderFloat("phi", &orbitalControls.verticalAngle, -pitchLimit, pitchLimit);
+                    ImGui::SliderFloat("distance", &orbitalControls.cameraDistanceToTarget, 0.0001f, 1.0f);
+                    
+                    float3 rel = orbitalControls.getCameraRelativePosition();
+                    ImGui::InputFloat3("position", &rel.x);
+
+                    float realDist = length(rel);
+                    ImGui::InputFloat("real distance", &realDist);
+
+                    float2 fov = make_float2(
+                        my::degrees(params.camera.verticalFieldOfView),
+                        my::degrees(params.camera.horizontalFieldOfView)
+                    );
+                    ImGui::InputFloat2("FOV", &fov.x);
+                }
+
                 if(ImGui::CollapsingHeader("Nuage de points", nodeFlags))
                 {
                 }

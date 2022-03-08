@@ -32,4 +32,13 @@ inline __host__ __device__ uchar3 int_as_uchar3(int i)
     return u;
 }
 
+#define declare_vector_conversion_function(type) \
+    template<typename T> \
+    __device__ __host__ type as_##type(const T& vec) \
+    { return make_##type(vec.x, vec.y, vec.z); }
+
+declare_vector_conversion_function(int3)
+declare_vector_conversion_function(uchar3)
+declare_vector_conversion_function(float3)
+
 #endif /* HELPER_CONVERSION_H */

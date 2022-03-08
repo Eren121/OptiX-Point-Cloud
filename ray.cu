@@ -9,6 +9,19 @@ texture<uchar4, 2, cudaReadModeElementType> texRef;
 
 extern "C"
 {
+    __device__ int my_rand(void) // RAND_MAX assumed to be 32767
+    {
+        static unsigned long int next = 1;
+
+        next = next * 1103515245 + 12345;
+        return (unsigned int)(next/65536) % 32768;
+    }
+
+    __device__ inline float randf()
+    {
+        return (float)my_rand() / 32767.0f;
+    }
+
     __global__ void __raygen__my_program()
     {
         const uint2 idx = make_uint2(optixGetLaunchIndex());
@@ -28,10 +41,6 @@ extern "C"
             // A la distance znear, le champ de vision voit exactement la taille du viewport
             // définie par (length(params.u), length(params.v))
             const float znear = 1.0f;
-
-            // L'origine du rayon est toujours l'origine de la caméra pour une perspective
-            rayOrigin = params.camera.origin;
-
             
             // Point projecté à une distance znear
             const float3 target =
@@ -39,7 +48,26 @@ extern "C"
               + gridPos.y * params.camera.v
               + params.camera.direction * znear;
 
+              
+            // L'origine du rayon est toujours l'origine de la caméra pour une perspective
+            rayOrigin = params.camera.transform.position;
+            
             rayDirection = normalize(target);
+
+            const float halfFovHorizontal = params.camera.horizontalFieldOfView / 2.0f;
+            const float halfFovVertical = params.camera.verticalFieldOfView / 2.0f;
+            const float3 cameraLook = params.camera.getLook();
+            
+            const float threadAngleHorizontal = halfFovHorizontal * gridPos.x;
+            const float threadAngleVertical = halfFovVertical * gridPos.y;
+            
+            rayDirection = normalize(cameraLook
+                + tan(threadAngleHorizontal) * params.camera.getRight()
+                + tan(threadAngleVertical) * params.camera.getUp()
+            );
+
+            // rayOrigin = params.camera.origin;
+            // rayDirection = normalize(target);
         }
         else
         {
@@ -74,8 +102,8 @@ extern "C"
         // On n'en contient qu'un seul, donc l'indice 0.
         const unsigned int missSbtIndex = 0;
 
-
         unsigned int payload_0;
+        unsigned int payload_1 = 0; // Appel initial, donc depth = 0
 
         optixTrace(
             params.traversableHandle,
@@ -89,7 +117,8 @@ extern "C"
             sbtOffset,
             sbtStride,
             missSbtIndex,
-            payload_0
+            payload_0,
+            payload_1
         );
         
         uchar3& pixel = *params.at(idx.x, idx.y);
@@ -102,13 +131,82 @@ extern "C"
     {
     }
 
+    /**
+     * @brief Récupère la position d'intersection depuis un programme CH.
+     */
+    __device__ float3 getIntersectionPos()
+    {
+        float3 intersectionPos;
+        intersectionPos.x = int_as_float(optixGetAttribute_1());
+        intersectionPos.y = int_as_float(optixGetAttribute_2());
+        intersectionPos.z = int_as_float(optixGetAttribute_3());
+
+        return intersectionPos;
+    }
+
     __global__ void __closesthit__my_program()
     {
-        const Point *pointBase = *reinterpret_cast<const Point**>(optixGetSbtDataPointer());
+        const Point* pointBase = *reinterpret_cast<const Point**>(optixGetSbtDataPointer());
         const size_t primitiveIndex = optixGetPrimitiveIndex();
-        const uchar3 rgb = pointBase[primitiveIndex].col;
+        const Point& currentPoint = pointBase[primitiveIndex];
 
-        optixSetPayload_0(uchar3_as_int(rgb));
+        float3 intersectionPos = getIntersectionPos();
+        float3 normal = normalize(intersectionPos - currentPoint.pos);
+        
+        // Tracing récursif (mêmes paramètres que le programme principal)
+
+        const float3 bouncingRayOrigin = currentPoint.pos;
+        const float3 bouncingRayDirection = reflect(optixGetWorldRayDirection(), normal);
+
+        const float tmin = 0.0f;
+        const float tmax = 1e16f;
+        const float rayTime = 0.0f;
+        const unsigned int rayFlags = OPTIX_RAY_FLAG_TERMINATE_ON_FIRST_HIT;
+        const OptixVisibilityMask visibilityMask(255);
+        const unsigned int sbtOffset = 0;
+        const unsigned int sbtStride = 0;
+        const unsigned int missSbtIndex = 0;
+
+        unsigned int payload_0;
+
+        // depth = depth + 1
+        unsigned int payload_1 = optixGetPayload_1() + 1;
+
+        static const int maxDepth = 2;
+
+        uchar3 pixelColor = currentPoint.col;
+
+        if(payload_1 < maxDepth)
+        {
+            optixTrace(
+                params.traversableHandle,
+                bouncingRayOrigin,
+                bouncingRayDirection,
+                tmin,
+                tmax,
+                rayTime,
+                visibilityMask,
+                rayFlags,
+                sbtOffset,
+                sbtStride,
+                missSbtIndex,
+                payload_0,
+                payload_1
+            );
+
+            uchar3 bouncingColor = int_as_uchar3(payload_0);
+
+            // Ratio de la couleur courante à garder par rapport
+            // au prochain rayon
+            const float directColorRatio = 0.1;
+
+            pixelColor = as_uchar3(
+                as_float3(pixelColor) * directColorRatio
+                + as_float3(bouncingColor) * (1.0f - directColorRatio) 
+            );
+        }
+
+        optixSetPayload_0(uchar3_as_int(pixelColor));
     }
 
     __global__ void __miss__my_program()
@@ -149,10 +247,23 @@ extern "C"
         return solutionsCount;
     }
 
+    __device__ void reportSphereIntersection(float t, float3 rayOrigin, float3 rayDirection)
+    {
+        const int hitKind = 0;
+        const float3 intersectPos = rayOrigin + t * rayDirection;
+        
+        optixReportIntersection(t, hitKind,
+            optixGetPrimitiveIndex(),
+            float_as_int(intersectPos.x),
+            float_as_int(intersectPos.y),
+            float_as_int(intersectPos.z));
+    }
+
     /**
-    * @brief Programme d'intersection avec des sphères provenant de l'exemple du SDK (cuda/sphere.cu)
-    * changé avec les structures de données pour s'adapter pour ce code.
-    * 
+    * @brief Programme d'intersection avec des sphères.
+    * Position de la collision (x, y, z) stockée dans les attributs 1, 2 et 3
+    * en float.
+    * Index de la primitive stocké dans l'attribut 0
     */
     __global__ void __intersection__my_program()
     {
@@ -175,7 +286,7 @@ extern "C"
         const float eq_c = lengthSquared(c - A) - r*r;
 
         float solutions[2];
-
+        
         switch(resolve_2nd_equation(solutions, eq_a, eq_b, eq_c))
         {
             case 0:
@@ -187,7 +298,7 @@ extern "C"
                     // 1 intersection
                     const float t = solutions[0];
                     if(t > ray_tmin && t < ray_tmax) {
-                        optixReportIntersection(t, 0);
+                        reportSphereIntersection(t, ray_orig, ray_dir);
                     }
                 }
                 break;
@@ -209,18 +320,12 @@ extern "C"
                         t_far = solutions[0];
                     }
                     
-                    // Les conditions ne servent à rien,
+                    // Pas besoin de vérifier si on est dans la range,
                     // La doc indique explicitement que optixReportIntersection()
                     // ne fait rien si t n'est pas dans la range
 
-                    //if(t_near > ray_tmin && t_near < ray_tmax)
-                    {
-                        optixReportIntersection(t_near, 0);
-                    }
-                    //if(t_far > ray_tmin && t_far < ray_tmax)
-                    {
-                        //optixReportIntersection(t_far, 0);
-                    }
+                    reportSphereIntersection(t_near, ray_orig, ray_dir);
+                    reportSphereIntersection(t_far, ray_orig, ray_dir);
                 }
                 break;
         }

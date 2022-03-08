@@ -18,6 +18,11 @@ public:
 
     size_t size() const { return m_points.size(); }
 
+    /**
+     * Assigne à chaque point une couleur aléatoire
+     */
+    void randomizeColors();
+
 private:
     void readPlyFile(const std::string & filepath, const bool preload_into_memory = true);
 

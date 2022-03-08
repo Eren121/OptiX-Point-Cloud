@@ -28,8 +28,9 @@ public:
      * @brief Construit une fenêtre, mais ne l'affiche pas encore.
      * Pour cela, appeler display().
      * 
-     * @param width La largeur de la fenêtre
-     * @param height La hauteur de la fenêtre
+     * @param width La largeur de la fenêtre.
+     * @param height La hauteur de la fenêtre.
+     * @param title Le titre de la fenêtre.
      */
     Application(int width, int height, const char *title = "");
     ~Application();
@@ -41,13 +42,12 @@ public:
 
     /**
      * @brief Affiche la fenêtre et bloque jusqu'à ce que la fenêtre se ferme.
-     * 
      */
     void display();
 
 private:
     /**
-     * @brief Callback pour les erreurs OpenGL. Facilite le debugging et évite de gérer chaque appel de fonction.
+     * @brief Callback pour les erreurs OpenGL. Facilite le debugging et évite de gérer chaque appel de fonction d'OpenGL.
      */
     static void GLAPIENTRY messageCallbackGL(GLenum source,
         GLenum type, GLuint id, GLenum severity, GLsizei length,
@@ -59,9 +59,12 @@ private:
      */
     static void errorCallbackGLFW(int error, const char *description);
 
+    
 public:
     static void noop() {}
 
+    GLFWwindow* getWindow() const { return m_window; }
+    
     /**
      * @brief Fonction de callback appelée à chaque affichage. L'utilisateur peut la rédéfinir et afficher ici la scène.
      */

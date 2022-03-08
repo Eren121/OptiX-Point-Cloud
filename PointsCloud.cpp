@@ -105,29 +105,31 @@ void PointsCloud::readPlyFile(const std::string & filepath, const bool preload_i
             Point p;
 
             if(v_vertices) {
-                p.pos = (*v_vertices)[i] * SCALE;
+                p.pos = (*v_vertices)[i];
             }
 
             if(v_normales) {
                 p.nor = (*v_normales)[i];
             }
 
+            // Couleur du point
+            // Si le point n'a pas de couleur dans le fichier,
+            // on donne une couleur blanc par défaut
+            
             if(v_colors) {
                 p.col = (*v_colors)[i];
             }
             else {
-                static int i = 0;
-                i++;
-                i %= 255;
-                p.col = make_uchar3(i, i, i);
+                p.col = make_uchar3(255, 255, 255);
             }
 
             if(v_radius) {
                 p.r = (*v_radius)[i];
-                p.r *= SCALE;
+                p.r *= 0.0005f;
+                //p.r *= SCALE;
                 //p.r = 0.0001f;
             }
-            p.r = 0.0003f * SCALE;
+            //p.r = 0.0003f * SCALE;
 
             // On sait que l'indice i existe car on a effectué m_points.resize()
             m_points[i] = p;
@@ -137,8 +139,16 @@ void PointsCloud::readPlyFile(const std::string & filepath, const bool preload_i
     {
         std::cerr << "Caught tinyply exception: " << e.what() << std::endl;
     }
+}
 
-
+void PointsCloud::randomizeColors()
+{
+    for(Point &point : m_points)
+    {
+        point.col.x = rand() % 255;
+        point.col.y = rand() % 255;
+        point.col.z = rand() % 255;
+    }
 }
 
 PointsCloud::PointsCloud(const char *filename)

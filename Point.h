@@ -4,7 +4,7 @@
 #include <optix.h>
 #include "helper_math.h"
 
-#define SCALE 1000.0f
+#define SCALE 1.0f
         
 struct Point
 {

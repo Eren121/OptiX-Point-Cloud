@@ -4,6 +4,7 @@
  // (linkage, erreur de syntaxe...)
 #include <cstdio>
 #include <cstdlib>
+#include <cmath>
 
 #include <cuda_runtime.h>
 #include <optix_stubs.h>
@@ -16,6 +17,21 @@
 
 #define CUDA_CHECK(expr) checkImplCuda((expr), __FILE__, __LINE__)
 #define OPTIX_CHECK(expr) checkImplOptiX((expr), __FILE__, __LINE__)
+
+namespace my
+{
+    static constexpr const float pi = 3.14159265358979323846;
+
+    inline float degrees(float radians)
+    {
+        return radians / pi * 180.0f;
+    }
+
+    inline float radians(float degrees)
+    {
+        return degrees / 180.0f * pi;
+    }
+}
 
 void checkImplCuda(cudaError_t result, const char *file, int line);
 void checkImplOptiX(OptixResult result, const char *file, int line);

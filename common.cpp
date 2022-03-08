@@ -3,7 +3,6 @@
 // Cet include, nécessaire, définit une variable globale OptiX "g_optixFunctionTable"
 #include <optix_function_table_definition.h>
 
-
 void checkImplCuda(cudaError_t result, const char *file, int line)
 {
     if(result != cudaSuccess)
