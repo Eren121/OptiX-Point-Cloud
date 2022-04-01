@@ -8,6 +8,7 @@
 
 #include <cuda_runtime.h>
 #include <optix_stubs.h>
+#include <utility>
 
 #define CAT2(x, y) x ## y
 #define CAT(x, y) CAT2(x, y)
@@ -20,16 +21,36 @@
 
 namespace my
 {
+    #define my_inline __forceinline__ __device__ __host__
+
     static constexpr const float pi = 3.14159265358979323846;
 
-    inline float degrees(float radians)
+    static my_inline float degrees(float radians)
     {
         return radians / pi * 180.0f;
     }
 
-    inline float radians(float degrees)
+    static my_inline float radians(float degrees)
     {
         return degrees / 180.0f * pi;
+    }
+
+    /**
+     * @brief Interpolation linéaire.
+     * @param x Start.
+     * @param y End.
+     * @param a Quelle valeur à prendre entre x et y. Range: [0; 1].
+     */
+    template<typename T>
+    my_inline T mix(T x, T y, float a)
+    {
+        return x * (1.0f - a) + y * a;
+    }
+
+    template<typename T>
+    my_inline auto ddot(T a, T b)
+    {
+        return max(static_cast<decltype(a.x)>(0), dot(a, b));
     }
 }
 
@@ -63,38 +84,60 @@ void checkImplOptiX(OptixResult result, const char *file, int line);
  *          ptr3 = reinterpret_cast<void*>(ptr1);   // Ok
  *
  */
-struct managed_device_ptr
+class managed_device_ptr
 {
+public:
+    managed_device_ptr(const managed_device_ptr&) = delete;
+    managed_device_ptr& operator=(const managed_device_ptr&) = delete;
+
+    managed_device_ptr(managed_device_ptr&& rhs)
+    {
+        using std::swap;
+
+        swap(m_device_ptr, rhs.m_device_ptr);
+        swap(m_size, rhs.m_size);
+    }
+
+    managed_device_ptr& operator=(managed_device_ptr&& rhs)
+    {
+        using std::swap;
+
+        swap(m_device_ptr, rhs.m_device_ptr);
+        swap(m_size, rhs.m_size);
+
+        return* this;
+    }
+
+    template<typename T>
+    static managed_device_ptr copyFrom(const T& cpuData)
+    {
+        return managed_device_ptr(&cpuData, sizeof(T));
+    }
+
     /**
-     * Ce pointeur pointe vers une zone mémoire qui se trouve sur le GPU.
-     * @remarks Initialisé dans le constructeur.
-     * @remarks L'utilisateur de la classe ne doit pas le désallouer, ce sera fait automatiquement dans le destructeur.
+     * @brief Construit un nullptr sur le GPU.
      */
-    CUdeviceptr device_ptr = 0;
+    managed_device_ptr() = default;
    
     /**
      * @brief Construit un nouveau bloc mémoire sur le GPU copiée depuis une zone mémoire du CPU.
      * 
-     * @param[in] data La donnée à copier sur le GPU
+     * @²[in] data La donnée à copier sur le GPU
      * @param[in] size La taille de donnée à copier sur le GPU
      */
     managed_device_ptr(const void *data, size_t size)
+        : managed_device_ptr(size)
     {
-        CUDA_CHECK(cudaMalloc(&toVoidPtr(), size));
         copyToDevice(data, size);
     }
 
     /**
-     * @brief Construit un nouveau bloc mémoire sur le GPU copié depuis un type générique.
-     * 
-     * @param[in] data La donnée à copier sur le GPU, on infère la taille grâce à sizeof(data).
-     *
-     * @remarks Le constructeur est annoté "explicit" pour éviter les conversions automatiques, ce qui est recommandé.
+     * @brief Construit un nouveau bloc mémoire en allouant seulement la taille sans copie.
      */
-    template<typename T>
-    explicit managed_device_ptr(const T& data)
-        : managed_device_ptr(&data, sizeof(T))
+    explicit managed_device_ptr(size_t size)
+        : m_size(size)
     {
+        CUDA_CHECK(cudaMalloc(&toVoidPtr(), size));
     }
 
     /**
@@ -103,7 +146,8 @@ struct managed_device_ptr
     ~managed_device_ptr()
     {
         CUDA_CHECK(cudaFree(toVoidPtr()));
-        device_ptr = 0;
+        m_device_ptr = 0;
+        m_size = 0;
     }
 
     /**
@@ -119,7 +163,12 @@ struct managed_device_ptr
      */
     void* & toVoidPtr()
     {
-        return reinterpret_cast<void* &>(device_ptr);
+        return reinterpret_cast<void* &>(m_device_ptr);
+    }
+
+    void* toVoidPtr() const
+    {
+        return reinterpret_cast<void*>(m_device_ptr);
     }
 
     /**
@@ -145,4 +194,51 @@ struct managed_device_ptr
     {
         CUDA_CHECK(cudaMemcpy(toVoidPtr(), data, size, cudaMemcpyHostToDevice));
     }
+
+    /**
+     * @brief Conversion implicite vers un pointeur sur le GPU.
+     */
+    operator void*() const
+    {
+        return toVoidPtr();
+    }
+
+    /**
+     * @brief Conversion implicite vers CUdeviceptr.
+     * @return Une référence vers le pointeur stocké, pour permettre par exemple si une fonction attend un CUdeviceptr* comme aabbBuffers.
+     */
+    operator const CUdeviceptr&() const
+    {
+        return m_device_ptr;
+    }
+
+    size_t size() const
+    {
+        return m_size;
+    }
+
+private:
+    /**
+     * Buffer alloué sur le GPU.
+     */
+    CUdeviceptr m_device_ptr = 0;
+
+    /**
+     * Le nombre de bytes stockés dans m_device_ptr.
+     */
+    size_t m_size = 0;
+};
+
+// Structure utilitaire, stocke le pointeur de données de l'AS et le pointeur OptiX
+// La seule raison d'être de cette classe est de pouvoir désallouer l'AS en gardant un pointeur vers le stockage.
+// Il existe une fonction pour convertir un pointeur en OptixTraversableHandle (optixConvertPointerToTraversableHandle())
+// Mais il est plus simple de stocker les deux soi-même.
+struct TraversableHandleStorage {
+
+    // handle référence une case mémoire dans d_output
+    OptixTraversableHandle handle = {};
+
+    // Stockage. OptiX n'alloue aucune mémoire, on doit allouer nous même
+    // Pour détruire l'AS, il suffira donc de désallouer d_output (fait automatiquement à la destruction du TraversableHandleStorage)
+    managed_device_ptr d_storage;
 };

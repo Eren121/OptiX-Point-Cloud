@@ -40,6 +40,7 @@
 #define HELPER_MATH_H
 
 #include "cuda_runtime.h"
+#include <glm/glm.hpp>
 
 typedef unsigned int uint;
 typedef unsigned short ushort;
@@ -50,8 +51,28 @@ typedef unsigned short ushort;
 
 #include "helper_conversion.h"
 
+/**
+ * @param x 0.0 <= x <= 1.0
+ * @return x scalé dans l'intervalle [start;end]
+ */
+template<typename T>
+inline __device__ __host__ T unNormalize(T x, T start, T end)
+{
+    return x * (end - start) + start;
+}
+
+inline __device__ __host__ uchar3 convertFloatToCharColor(float3 color)
+{
+    return make_uchar3(
+        glm::clamp(color.x, 0.0f, 1.0f) * 255.0f,
+        glm::clamp(color.y, 0.0f, 1.0f) * 255.0f,
+        glm::clamp(color.z, 0.0f, 1.0f) * 255.0f
+    );
+}
+
 #ifndef __CUDACC__
 #include <math.h>
+
 
 ////////////////////////////////////////////////////////////////////////////////
 // host implementations of CUDA functions

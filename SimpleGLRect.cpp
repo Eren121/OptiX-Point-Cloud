@@ -1,5 +1,6 @@
 #include "SimpleGLRect.hpp"
 #include <iostream>
+#include <vector>
 
 SimpleGLRect::SimpleGLRect(int width, int height)
     : m_width(width), m_height(height)
@@ -21,7 +22,7 @@ SimpleGLRect::~SimpleGLRect()
     glDeleteTextures(1, &m_texture);
     m_texture = 0;
 
-    glDeleteShader(m_program);
+    glDeleteProgram(m_program);
     m_program = 0;
 }
 
@@ -59,7 +60,7 @@ void SimpleGLRect::createVAO()
 
     glGenVertexArrays(1, &m_vao);
 }
-#include <vector>
+
 void SimpleGLRect::createTexture()
 {
     glGenTextures(1, &m_texture);

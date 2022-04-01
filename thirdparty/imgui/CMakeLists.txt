@@ -25,6 +25,9 @@ add_library(imgui ${SRC})
 
 target_include_directories(imgui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/backends)
 
+add_compile_definitions(GLM_FORCE_CUDA)
+add_subdirectory(glm)
+
 # ImGUI dépend de GLFW et GLAD, qui doit être disponible quand ce projet est parsé par CMake
 # Concrètement, imgui est le dernier add_subdirectory() après GLFW et GLAD
-target_link_libraries(imgui glfw glad)
+target_link_libraries(imgui glfw glad glm)

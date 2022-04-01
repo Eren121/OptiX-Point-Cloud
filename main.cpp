@@ -2,9 +2,11 @@
 #include <iostream>
 #include <fstream>
 #include <vector>
+#include <algorithm>
 #include <cuda_runtime.h> // On est pas dans un .cu sinon c'est inclus automatiquement
 #include <optix.h>
 #include <optix_stubs.h>
+#include <optix_stack_size.h>
 #include "ray.cuh"
 #include "Record.hpp"
 #include "stb_image_write.h" // Pour écrire des PNG
@@ -14,6 +16,8 @@
 #include "PointsCloud.hpp"
 #include "SimpleGLRect.hpp"
 #include "OrbitalControls.hpp"
+#include "Scene.hpp"
+#include "Gui.hpp"
 
 std::unique_ptr<PointsCloud> points;
 
@@ -84,16 +88,22 @@ const OptixPipelineCompileOptions* getPipelineCompileOptions()
     // Si notre structure d'accélération ne possède que des triangles
     // ou des structures custom
     // on peut mettre un flag pour optimiser
-    pipelineCompileOptions.usesPrimitiveTypeFlags = 0;
+    pipelineCompileOptions.usesPrimitiveTypeFlags = OPTIX_PRIMITIVE_TYPE_FLAGS_CUSTOM;
 
     // Pour debugger
     // _NONE en release
-    pipelineCompileOptions.exceptionFlags =  OPTIX_EXCEPTION_FLAG_DEBUG | OPTIX_EXCEPTION_FLAG_TRACE_DEPTH | OPTIX_EXCEPTION_FLAG_STACK_OVERFLOW;
+    pipelineCompileOptions.exceptionFlags =
+        OPTIX_EXCEPTION_FLAG_DEBUG |
+        OPTIX_EXCEPTION_FLAG_TRACE_DEPTH |
+        OPTIX_EXCEPTION_FLAG_STACK_OVERFLOW |
+        OPTIX_EXCEPTION_FLAG_USER;
 
     // Comme cet exemple n'a qu'une seule structure d'accélération,
     // cette option est nécessaire sinon erreur OPTIX_EXCEPTION_CODE_UNSUPPORTED_SINGLE_LEVEL_GAS
+    // CHANGEMENT: on utilise maintenant une IAS pour mixer custom primitives / curves dans on retire l'options
     pipelineCompileOptions.traversableGraphFlags =
-        OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_LEVEL_INSTANCING | OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_GAS;
+        //OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_LEVEL_INSTANCING | OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_GAS;
+        OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_ANY;
 
     return &pipelineCompileOptions;
 }
@@ -134,7 +144,7 @@ std::vector<OptixProgramGroup> createProgramGroup(
     OptixDeviceContext context,
     OptixModule module)
 {
-    const size_t nb_programs = 3;
+    const size_t nb_programs = 4;
     OptixProgramGroupDesc pgDesc[nb_programs] = {};
     pgDesc[0].kind = OPTIX_PROGRAM_GROUP_KIND_RAYGEN;
     pgDesc[0].raygen.entryFunctionName = "__raygen__my_program";
@@ -153,6 +163,10 @@ std::vector<OptixProgramGroup> createProgramGroup(
     pgDesc[2].kind = OPTIX_PROGRAM_GROUP_KIND_MISS;
     pgDesc[2].miss.entryFunctionName = "__miss__my_program";
     pgDesc[2].miss.module = module;
+
+    pgDesc[3].kind = OPTIX_PROGRAM_GROUP_KIND_EXCEPTION;
+    pgDesc[3].exception.entryFunctionName = "__exception__my_program";
+    pgDesc[3].exception.module = module;
 
     std::vector<OptixProgramGroup> groups(nb_programs, nullptr);
 
@@ -262,8 +276,8 @@ void printResult(const Params &params)
 // C'est la seule partie qui dépend vraiment de l'application, le reste des fonctions (createPipeline(), createContext()...)
 // sera a peu près pareil quelque soit l'application
 
-
-TraversableHandleStorage createAccelerationStructure(OptixDeviceContext context, CUstream stream)
+template<typename It>
+TraversableHandleStorage createAccelerationStructure(OptixDeviceContext context, CUstream stream, It begin, It end)
 {
     // ====== Options de la structure accélératrice ======
 
@@ -273,7 +287,7 @@ TraversableHandleStorage createAccelerationStructure(OptixDeviceContext context,
 
     // Options de la structure accélératrice
     OptixAccelBuildOptions options = {};
-    options.buildFlags = OPTIX_BUILD_FLAG_NONE;
+    options.buildFlags = OPTIX_BUILD_FLAG_ALLOW_COMPACTION;
     options.operation = OPTIX_BUILD_OPERATION_BUILD; // On veut construire la structure accélératrice, pas l'actualiser pour l'instant
     options.motionOptions.numKeys = 0; // 0 pour pas de motion blur, que l'on utilise pas ici
 
@@ -305,8 +319,10 @@ TraversableHandleStorage createAccelerationStructure(OptixDeviceContext context,
 
     // Convertit le vecteur de points en vecteur de AABB
     std::vector<OptixAabb> aabbs;
-    for(const Point& point : points->getPoints())
+    for(It it = begin; it != end; ++it)
+    //for(const Point& point : points->getPoints())
     {
+        const Point& point = *it;
         aabbs.push_back(point.toAabb());
     }
 
@@ -370,7 +386,7 @@ TraversableHandleStorage createAccelerationStructure(OptixDeviceContext context,
         buildInputs.push_back(OptixBuildInput{});
         OptixBuildInput& buildInput = buildInputs.back();
         buildInput.type = OPTIX_BUILD_INPUT_TYPE_CUSTOM_PRIMITIVES;
-        buildInput.customPrimitiveArray.aabbBuffers = &d_aabbs.device_ptr;
+        buildInput.customPrimitiveArray.aabbBuffers = &static_cast<const CUdeviceptr&>(d_aabbs);
         buildInput.customPrimitiveArray.numPrimitives = static_cast<unsigned int>(aabbs.size()); // Taille du tableau aabbBuffers
         
         // Notre géométrie customisée a besoin que d'une seule donnée donc 1 SBT Record
@@ -408,8 +424,8 @@ TraversableHandleStorage createAccelerationStructure(OptixDeviceContext context,
     ));
 
     // Maintenant que l'on a la taille, on peut allouer les données
-    // d_output et d_temp doivent être alignés sur 128-bytes (peu importe car cudaMalloc() aligne toujours sur 256-bytes)
-    CUDA_CHECK(cudaMalloc(&reinterpret_cast<void*>(outputHandle.d_output), bufferSizes.outputSizeInBytes));
+    // output et temp doivent être alignés sur 128-bytes (peu importe car cudaMalloc() aligne toujours sur 256-bytes)
+    outputHandle.d_storage = managed_device_ptr(bufferSizes.outputSizeInBytes);
     CUDA_CHECK(cudaMalloc(&reinterpret_cast<void*>(d_temp), bufferSizes.tempSizeInBytes));
 
     std::cout << "accel_mem_size=" << bufferSizes.outputSizeInBytes << " bytes" << std::endl;
@@ -431,7 +447,7 @@ TraversableHandleStorage createAccelerationStructure(OptixDeviceContext context,
         &options,
         buildInputs.data(), static_cast<unsigned int>(buildInputs.size()),
         d_temp, bufferSizes.tempSizeInBytes,
-        outputHandle.d_output, bufferSizes.outputSizeInBytes,
+        outputHandle.d_storage, outputHandle.d_storage.size(),
         &outputHandle.handle,
         nullptr, 0 // Propriétés non utilisées ici
     ));
@@ -447,9 +463,11 @@ TraversableHandleStorage createAccelerationStructure(OptixDeviceContext context,
 
 int main(int argc, char **argv)
 {
-    const char* path = R"(../data/bunny/reconstruction/bun_zipper.ply)";
+    Gui gui;
+
+const char* path = R"(../data/bunny/reconstruction/bun_zipper.ply)";
     points = std::make_unique<PointsCloud>(path);
-    points->randomizeColors();
+    //points->randomizeColors();
     // ====== Initialisation ======
 
     initCuda();
@@ -466,6 +484,7 @@ int main(int argc, char **argv)
     OptixProgramGroup raygenGroup = groups[0];
     OptixProgramGroup hitGroup = groups[1];
     OptixProgramGroup missGroup = groups[2];
+    OptixProgramGroup exceptionGroup = groups[3];
 
     OptixPipeline pipeline = createPipeline(context, groups);
 
@@ -474,40 +493,77 @@ int main(int argc, char **argv)
 
     // ====== Créer la structure accélératrice = envoyer les géométries sur le GPU ======
 
-    TraversableHandleStorage traversableHandleStorage = createAccelerationStructure(context, stream); 
+    auto beginPoints = begin(points->getPoints());
+    auto endPoints = end(points->getPoints());
+    const auto numPoints = points->getPoints().size();
 
+    TraversableHandleStorage traversableHandleStorage = createAccelerationStructure(
+        context, stream, beginPoints, beginPoints + numPoints / 2);
+
+    TraversableHandleStorage traversableHandleStorage2 = createAccelerationStructure(
+        context, stream, beginPoints + numPoints / 2, endPoints);
+
+    TraversableHandleStorage ias = mergeGASIntoIAS(context, stream, traversableHandleStorage.handle, traversableHandleStorage2.handle);
+
+    OptixStackSizes stack_sizes = {};
+    OPTIX_CHECK( optixUtilAccumulateStackSizes(raygenGroup, &stack_sizes ) );
+    OPTIX_CHECK( optixUtilAccumulateStackSizes(hitGroup, &stack_sizes ) );
+    OPTIX_CHECK( optixUtilAccumulateStackSizes(missGroup, &stack_sizes ) );
+    OPTIX_CHECK( optixUtilAccumulateStackSizes(exceptionGroup, &stack_sizes ) );
+
+    const uint32_t max_trace_depth = 2;
+    uint32_t direct_callable_stack_size_from_traversal;
+    uint32_t direct_callable_stack_size_from_state;
+    uint32_t continuation_stack_size;
+    OPTIX_CHECK( optixUtilComputeStackSizes( &stack_sizes, max_trace_depth,
+                                             0,  // maxCCDepth
+                                             0,  // maxDCDEpth
+                                             &direct_callable_stack_size_from_traversal,
+                                             &direct_callable_stack_size_from_state, &continuation_stack_size ) );
+    OPTIX_CHECK( optixPipelineSetStackSize( pipeline, direct_callable_stack_size_from_traversal,
+                                            direct_callable_stack_size_from_state, continuation_stack_size,
+                                            4  // maxTraversableDepth
+                                            ) );
+    
     // ====== Création des paramètres à envoyer au GPU pour le ray tracing ======
 
-    RaygenRecord raygenRecord;
+    managed_device_ptr d_pointsCloud(points->data(), sizeof(Point) * points->size());
+
+    Record<CUdeviceptr> raygenRecord;
     raygenRecord.fill(raygenGroup);
-    raygenRecord.data = make_uchar3(255, 255, 0);
+    raygenRecord.data = d_pointsCloud;
 
     Record<void*> missRecord;
     missRecord.fill(missGroup);
 
     Record<CUdeviceptr> hitgroupRecord;
-
     // Alloue les informations de chaque points sur le GPU
-    managed_device_ptr d_pointsCloud(points->data(), sizeof(Point) * points->size());
-    hitgroupRecord.data = d_pointsCloud.device_ptr;
+    // Le raygen et hitgroup record on la même donnée, pour qu'ils puissent tous les deux accéder aux points
+    hitgroupRecord.data = d_pointsCloud;
     hitgroupRecord.fill(hitGroup);
 
-    managed_device_ptr d_raygenRecord(raygenRecord);
-    managed_device_ptr d_missRecord(missRecord);
-    managed_device_ptr d_hitgroupRecord(hitgroupRecord);
-    
+    Record<void*> exceptionRecord;
+    exceptionRecord.fill(exceptionGroup);
+
+    managed_device_ptr d_raygenRecord = managed_device_ptr::copyFrom(raygenRecord);
+    managed_device_ptr d_missRecord = managed_device_ptr::copyFrom(missRecord);
+    managed_device_ptr d_hitgroupRecord = managed_device_ptr::copyFrom(hitgroupRecord);
+    managed_device_ptr d_exceptionRecord = managed_device_ptr::copyFrom(exceptionRecord);
+
     // définir au minimum le raygenRecord et le missRecord
     OptixShaderBindingTable sbt = {};
 
-    sbt.raygenRecord = d_raygenRecord.device_ptr;
+    sbt.raygenRecord = d_raygenRecord;
 
-    sbt.missRecordBase = d_missRecord.device_ptr;
+    sbt.missRecordBase = d_missRecord;
     sbt.missRecordStrideInBytes = sizeof(missRecord);
     sbt.missRecordCount = 1;
 
-    sbt.hitgroupRecordBase = d_hitgroupRecord.device_ptr;
+    sbt.hitgroupRecordBase = d_hitgroupRecord;
     sbt.hitgroupRecordStrideInBytes = sizeof(hitgroupRecord);
     sbt.hitgroupRecordCount = 1;
+
+    sbt.exceptionRecord = d_exceptionRecord;
 
     
     {
@@ -516,10 +572,10 @@ int main(int argc, char **argv)
         Application app(width, height);
 
         // Contient la texture qui sera affiché sur toute la fenêtre à chaque Frame, et le VAO et le VBO associés à la texture.        
-        SimpleGLRect rect(width, height);
+        static std::unique_ptr<SimpleGLRect> rect = std::make_unique<SimpleGLRect>(width, height);
 
 
-        GLuint pbo;
+        static GLuint pbo;
         glGenBuffers(1, &pbo);
         glBindBuffer(GL_PIXEL_UNPACK_BUFFER, pbo);
         glBufferData(GL_PIXEL_UNPACK_BUFFER, width * height * 3, NULL, GL_STREAM_DRAW);
@@ -539,36 +595,72 @@ int main(int argc, char **argv)
             
         static OrbitalControls orbitalControls(make_float3(0.0f, 0.0f, 0.0f), 100.0f);
 
+        // Définir le centre de la vue comme le centre estimé du model
+        // On estime le centre en calculant la moyenne de la position des points
+        // (peut ne pas toujours marcher, ce n'est qu'une heuristique)
+        float3 averagePointPos = make_float3(0.0f);
+        for(const Point& point : points->getPoints())
+        {
+            averagePointPos += point.pos;
+        }
+
+        averagePointPos /= points->size();
+
+        orbitalControls.cameraTarget = averagePointPos;
+
+        // Maintenant que l'on a le centre de la vue,
+        // on estime encore une fois avec une heuristique le zoom adéquat
+        // on prend le point le plus éloigné de la scène et on en définit le zoom de la caméra
+        const Point& furthestPoint = *std::max_element(
+            begin(points->getPoints()), end(points->getPoints()),
+            [&](const Point& a, const Point& b) {
+            return lengthSquared(a.pos - orbitalControls.cameraTarget) < 
+                   lengthSquared(b.pos - orbitalControls.cameraTarget);
+        });
+
+        const float arbitraryDistanceFactor = 2.5f;
+        orbitalControls.cameraDistanceToTarget = length(furthestPoint.pos - orbitalControls.cameraTarget) * arbitraryDistanceFactor;
+
+        orbitalControls.horizontalAngle = my::pi / 4.0f;
+        orbitalControls.verticalAngle = my::pi / 4.0f;
+
         // static pour permettre d'être utilisé dans les callbacks GLFW pour les inputs
         static Params params = {};
 
         params.camera.origin.z = 300;
         params.width = width;
         params.height = height;
-        params.traversableHandle = traversableHandleStorage.handle;
+        params.traversableHandle = ias.handle;
 
         glfwSetScrollCallback(app.getWindow(), [](GLFWwindow*, double xoffset, double yoffset) {
-            printf("%lf/%lf\n", xoffset, yoffset);
-            orbitalControls.cameraDistanceToTarget *= (1.0f + yoffset * 0.1f);
+
+            // Ne pas scroller si on focus une fenêtre ImGUI
+            if(!ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow))
+            {
+                const float zoomSpeed = 0.1f;
+                orbitalControls.cameraDistanceToTarget *= (1.0f - yoffset * zoomSpeed);
+            }
         });
 
         glfwSetCursorPosCallback(app.getWindow(), [](GLFWwindow* window, double xpos, double ypos) {
             
+            static float2 previousPos = make_float2(xpos, ypos);
+            const float2 currentPos = make_float2(xpos, ypos);
+
             // Déplacer uniquement si le bouton gauche est cliqué
-            if( glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS)
+            if( glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS)
             {
                 const float speed = 0.02f;
-                
-                static float2 previousPos = make_float2(xpos, ypos);
-                const float2 currentPos = make_float2(xpos, ypos);
 
                 const float2 deltaPos = currentPos - previousPos;
 
                 orbitalControls.horizontalAngle += -deltaPos.x * speed;
-                orbitalControls.verticalAngle += -deltaPos.y * speed;
-
-                previousPos = currentPos;
+                orbitalControls.verticalAngle += deltaPos.y * speed;
             }
+
+            // Même si le bouton n'est pas appuyé, on enregistre la position précédente
+            // Sinon quand l'utilisateur bouge la souris sans cliquer, cela fera un "saut" dans le déplacement
+            previousPos = currentPos;
         });
 
         app.onDraw = [&]() {
@@ -583,7 +675,7 @@ int main(int argc, char **argv)
             // Récupère le pointeur de la texture mappé sur CUDA (aussi dans le GPU...)
             CUDA_CHECK(cudaGraphicsResourceGetMappedPointer(&d_image, &sizeInBytes, textureResource));
             
-            glBindTexture(GL_TEXTURE_2D, rect.getTexture());
+            glBindTexture(GL_TEXTURE_2D, rect->getTexture());
             glBindBuffer(GL_PIXEL_UNPACK_BUFFER, pbo);
             glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, 0);
             glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
@@ -591,20 +683,18 @@ int main(int argc, char **argv)
             // Détruit la ressource d'interoperabilité CUDA, à chaque frame
             CUDA_CHECK(cudaGraphicsUnmapResources(1, &textureResource, stream));
 
-            const unsigned int depth = 1;
-
             orbitalControls.applyToCamera(params.camera, my::radians(70.0f), static_cast<float>(width) / height);
             params.image = reinterpret_cast<uchar3*>(d_image);
             
             // Copier params sur le GPU
-            managed_device_ptr d_params(params);
+            managed_device_ptr d_params(&params, sizeof(params));
     
+            const unsigned int depth = 1;
 
             OPTIX_CHECK(optixLaunch(
                 pipeline,
                 stream,
-                d_params.device_ptr,
-                sizeof(Params),
+                d_params, d_params.size(),
                 &sbt,
                 params.width, params.height, depth
             ));
@@ -612,94 +702,11 @@ int main(int argc, char **argv)
             // Utile ?
             CUDA_CHECK(cudaDeviceSynchronize());
 
-            rect.draw();
+            rect->draw();
 
-            static bool showDemoWindow = false;
-
-            if(showDemoWindow)
-            {
-                ImGui::ShowDemoWindow(&showDemoWindow);
-            }
+            gui.draw(params, orbitalControls);
             
-            /*
-            static float t = 0.0f;
-            t += 0.01f;
-
-            params.camera.origin.x = cos(t) * SCALE;
-            params.camera.origin.y = 0.0f;
-            params.camera.origin.z = sin(t) * SCALE;
-            params.camera.direction = normalize(-params.camera.origin);
-            
-            static float3 worldUp = make_float3(0.0f, 1.0f, 0.0f);
-            params.camera.computeUVFromUpVector(worldUp, make_float2(width, height) / SCALE / 3.0f);
-            */
-
-            static bool showInterface = true;
-
-            const ImGuiTreeNodeFlags nodeFlags = ImGuiTreeNodeFlags_DefaultOpen;
-
-            if(ImGui::Begin("Interface", &showInterface))
-            {
-                if(ImGui::CollapsingHeader("Camera"))
-                {   
-                    // éviter d'être complètement à la verticale (+/- 180°),
-                    // sinon le produit vectoriel avec worldUp sera toujours nul
-                    // et donc il y aura un "gap" dans l'affichage et la caméra
-                    // sera orientée n'importe comment
-                    const float pitchLimit = (my::pi / 2.0f - 0.001f);
-
-                    ImGui::SliderFloat("theta", &orbitalControls.horizontalAngle, -my::pi, my::pi);
-                    ImGui::SliderFloat("phi", &orbitalControls.verticalAngle, -pitchLimit, pitchLimit);
-                    ImGui::SliderFloat("distance", &orbitalControls.cameraDistanceToTarget, 0.0001f, 1.0f);
-                    
-                    float3 rel = orbitalControls.getCameraRelativePosition();
-                    ImGui::InputFloat3("position", &rel.x);
-
-                    float realDist = length(rel);
-                    ImGui::InputFloat("real distance", &realDist);
-
-                    float2 fov = make_float2(
-                        my::degrees(params.camera.verticalFieldOfView),
-                        my::degrees(params.camera.horizontalFieldOfView)
-                    );
-                    ImGui::InputFloat2("FOV", &fov.x);
-                }
-
-                if(ImGui::CollapsingHeader("Nuage de points", nodeFlags))
-                {
-                }
-                if(ImGui::CollapsingHeader("Caméra", nodeFlags))
-                {
-                    ImGui::SliderFloat3("Position", &params.camera.origin.x,
-                        -2.0f * SCALE, 2.0f * SCALE);
-
-
-                    if(ImGui::SliderFloat3("Direction", &params.camera.direction.x, -1.0f, 1.0f))
-                    {
-                        // Exécuté si l'utilisateur change la valeur
-                        // Le vecteur doit être normalisé, on le normalise alors ici
-                        params.camera.direction = normalize(params.camera.direction);
-                    }
-
-                    static float3 worldUp = make_float3(0.0f, 1.0f, 0.0f);
-                    if(ImGui::SliderFloat3("World Up", &worldUp.x, -1.0f, 1.0f))
-                    {
-                        worldUp = normalize(worldUp);
-                    }
-
-                    static float2 cameraSize = make_float2(1.0f, 1.0f);
-                    ImGui::SliderFloat("Viewport", &cameraSize.x, 0.1f, 3.0f);
-                    cameraSize.y = cameraSize.x;
-                    
-                    params.camera.computeUVFromUpVector(worldUp, cameraSize);
-                }
-                if(ImGui::CollapsingHeader("OpenGL", nodeFlags))
-                {
-                    ImVec2 wsize(200, 200);
-                    ImGui::Image(reinterpret_cast<ImTextureID>(rect.getTexture()), wsize, ImVec2(0, 1), ImVec2(1, 0));
-                }
-            }
-            ImGui::End();
+            params.frame++;
         };
 
         app.display();
@@ -712,9 +719,6 @@ int main(int argc, char **argv)
     
 
     // ====== Destruction ======
-
-    // Détruit la structure accélératrice
-    CUDA_CHECK(cudaFree(reinterpret_cast<void*>(traversableHandleStorage.d_output)));
 
     OPTIX_CHECK(optixPipelineDestroy(pipeline));
 

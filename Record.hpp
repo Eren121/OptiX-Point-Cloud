@@ -32,5 +32,3 @@ struct Record
         optixSbtRecordPackHeader(programGroup, this);
     }
 };
-
-using RaygenRecord = Record<uchar3>; // Triangle RGB

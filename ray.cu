@@ -4,11 +4,35 @@
 #include <cuda_runtime.h>
 #include "helper_math.h"
 #include "Point.h"
+#include <climits>
+#include "Distribution.hpp"
 
 texture<uchar4, 2, cudaReadModeElementType> texRef;
 
 extern "C"
 {
+    struct Payload
+    {
+        bool intersected = false;
+        size_t primitiveID;
+        float3 intersection;
+    };
+
+    static __forceinline__ __device__ void* unpackPointer( unsigned int i0, unsigned int i1 )
+    {
+        const unsigned long long uptr = static_cast<unsigned long long>( i0 ) << 32 | i1;
+        void*           ptr = reinterpret_cast<void*>( uptr );
+        return ptr;
+    }
+    
+    
+    static __forceinline__ __device__ void  packPointer( void* ptr, unsigned int& i0, unsigned int& i1 )
+    {
+        const unsigned long long uptr = reinterpret_cast<unsigned long long>( ptr );
+        i0 = uptr >> 32;
+        i1 = uptr & 0x00000000ffffffff;
+    }
+
     __device__ int my_rand(void) // RAND_MAX assumed to be 32767
     {
         static unsigned long int next = 1;
@@ -22,65 +46,13 @@ extern "C"
         return (float)my_rand() / 32767.0f;
     }
 
-    __global__ void __raygen__my_program()
+    /**
+     * Trace un rayon et retourne sa couleur
+     */
+    __device__ float3 traceRayAndGetColor(float3 rayOrigin, float3 rayDirection)
     {
-        const uint2 idx = make_uint2(optixGetLaunchIndex());
-        const uint2 dim = make_uint2(optixGetLaunchDimensions());
-        
-        const bool perspective = true;
+        const Point* const pointBase = *reinterpret_cast<const Point**>(optixGetSbtDataPointer());
 
-        // Comme en OpenGL, on définit la taille de la fenêtre dans l'intervalle [-1;1]
-        // Et on lance un rayon vers l'intérieur de la fenêtre donc en -Z
-        float2 gridPos = (make_float2(idx) / make_float2(dim) * 2.0f) - 1.0f;
-        float3 rayDirection, rayOrigin;
-
-        if(perspective)
-        {
-            // Variable utile pour calculer la direction du rayon
-            // Ici, on considère que:
-            // A la distance znear, le champ de vision voit exactement la taille du viewport
-            // définie par (length(params.u), length(params.v))
-            const float znear = 1.0f;
-            
-            // Point projecté à une distance znear
-            const float3 target =
-                gridPos.x * params.camera.u
-              + gridPos.y * params.camera.v
-              + params.camera.direction * znear;
-
-              
-            // L'origine du rayon est toujours l'origine de la caméra pour une perspective
-            rayOrigin = params.camera.transform.position;
-            
-            rayDirection = normalize(target);
-
-            const float halfFovHorizontal = params.camera.horizontalFieldOfView / 2.0f;
-            const float halfFovVertical = params.camera.verticalFieldOfView / 2.0f;
-            const float3 cameraLook = params.camera.getLook();
-            
-            const float threadAngleHorizontal = halfFovHorizontal * gridPos.x;
-            const float threadAngleVertical = halfFovVertical * gridPos.y;
-            
-            rayDirection = normalize(cameraLook
-                + tan(threadAngleHorizontal) * params.camera.getRight()
-                + tan(threadAngleVertical) * params.camera.getUp()
-            );
-
-            // rayOrigin = params.camera.origin;
-            // rayDirection = normalize(target);
-        }
-        else
-        {
-            // Ortographique
-
-            rayDirection = params.camera.direction;
-
-            // Passe de l'intervalle [-1;1] aux coordonnées caméra pour ce pixel
-            rayOrigin = params.camera.origin +
-                gridPos.x * params.camera.u * SCALE
-              + gridPos.y * params.camera.v * SCALE;
-            
-        }
         // tmin: Distance minimum / maximum d'intersection
         const float tmin = 0.0f, tmax = 1e16f;
 
@@ -101,30 +73,196 @@ extern "C"
         // Indice du programm "__miss__"
         // On n'en contient qu'un seul, donc l'indice 0.
         const unsigned int missSbtIndex = 0;
-
-        unsigned int payload_0;
-        unsigned int payload_1 = 0; // Appel initial, donc depth = 0
-
-        optixTrace(
-            params.traversableHandle,
-            rayOrigin,
-            rayDirection,
-            tmin,
-            tmax,
-            rayTime,
-            visibilityMask,
-            rayFlags,
-            sbtOffset,
-            sbtStride,
-            missSbtIndex,
-            payload_0,
-            payload_1
-        );
         
-        uchar3& pixel = *params.at(idx.x, idx.y);
+        const int maxDepth = 1;
+
+        float3 rayColor = make_float3(0.0f);
+
+        float3 currentRayOrigin = rayOrigin;
+        float3 currentRayDirection = rayDirection;
+
+        for(int depth = 0; depth < maxDepth; ++depth)
+        {
+            Payload payload;
+            unsigned int u0;
+            unsigned int u1;
+            unsigned int u2 = UINT_MAX;
+            packPointer(&payload, u0, u1);
+
+            optixTrace(
+                params.traversableHandle,
+                currentRayOrigin,
+                currentRayDirection,
+                tmin,
+                tmax,
+                rayTime,
+                visibilityMask,
+                rayFlags,
+                sbtOffset,
+                sbtStride,
+                missSbtIndex,
+                u0,
+                u1,
+                u2
+            );
+            
+            if(payload.intersected)
+            {
+                // Un point d'intersection a été trouvé
+                // On rebondit sur la normale pour continuer le rayon
+                // si la profondeur maximale n'a pas été atteinte
+                // Et on actualise la couleur du rayon en mixant avec la couleur actuelle de rayon avec celle du point
+
+                const Point& pointCollided = pointBase[payload.primitiveID];
+                const float3& collisionPos = payload.intersection;
+                const float3& pointColor = as_float3(pointCollided.col) / 255.0f;
+                const float3 collisionPosNormal = normalize(payload.intersection - pointCollided.pos);
+
+                // Actualise la couleur
+
+                if(depth == 0) {
+                    // Première itération, on ne mixe pas avec la couleur d'origine car il y en a pas encore
+
+                    // Application de la lumière (Phong)
+                    // Lumière directionnelle
+                    const float3 lightColor = make_float3(1.0f, 1.0f, 1.0f);
+                    const float3 ambientColor = make_float3(0.2f, 0.2f, 0.2f);
+                    const float diffuseIntensity = my::ddot(-params.lightDirection, collisionPosNormal);
+
+                    rayColor = pointColor * ambientColor;
+
+                    // Vérifie si le point est dans l'ombre
+                    if(params.shadowRayEnabled)
+                    {
+                        Payload payloadShadow;
+                        unsigned int u0;
+                        unsigned int u1;
+                        unsigned int u2 = payload.primitiveID; // éviter de re-collisioner avec le même point
+                        packPointer(&payloadShadow, u0, u1);
+            
+                        optixTrace(
+                            params.traversableHandle,
+                            collisionPos,
+                            -params.lightDirection,
+                            tmin,
+                            tmax,
+                            rayTime,
+                            visibilityMask,
+                            rayFlags,
+                            sbtOffset,
+                            sbtStride,
+                            missSbtIndex,
+                            u0,
+                            u1,
+                            u2
+                        );
+
+                        const bool inShadow = payloadShadow.intersected;
+
+                        if(!inShadow) {
+                            rayColor += pointColor * lightColor * diffuseIntensity;
+                        }
+                    }
+                    else
+                    {
+                        rayColor += pointColor * lightColor * diffuseIntensity;
+                    }
+                }
+                else {
+                    // Ratio de la couleur courante à garder par rapport
+                    // au prochain rayon
+                    const float originalColorRatioToKeep = 0.1f;
+                    rayColor = my::mix(pointColor, rayColor, originalColorRatioToKeep);
+                }
+
+                // Tracing récursif
+                // Pour éviter de collider avec le même point car on part de sa surface, on décale légèrement au dessus de sa surface
+
+                const float3 bouncingRayOrigin = pointCollided.pos + collisionPosNormal * pointCollided.r * params.pointRadiusModifier;
+                const float3 bouncingRayDirection = reflect(currentRayDirection, collisionPosNormal);
+
+                currentRayOrigin = bouncingRayOrigin;
+                currentRayDirection = bouncingRayDirection;
+            }
+            else
+            {
+                break;
+            }
+        }        
         
-        uchar3 rgb = int_as_uchar3(payload_0);
-        pixel = rgb;
+        const float3 minColor = make_float3(0.0f);
+        const float3 maxColor = make_float3(1.0f);
+        return clamp(rayColor, minColor, maxColor);
+    }
+
+    __global__ void __raygen__my_program()
+    {
+        const Point* const pointBase = *reinterpret_cast<const Point**>(optixGetSbtDataPointer());
+
+        const uint2 idx = make_uint2(optixGetLaunchIndex());
+        const uint2 dim = make_uint2(optixGetLaunchDimensions());
+        
+        // Un kernel est lancé par pixel
+        // gridPos définit la position 2D du pixel cible dans la fenêtre du rayon
+        // griPos appartient à l'intervalle (-1;1)^2.
+        glm::vec2 gridPos = (Distribution::linspace<glm::vec2>(to_ivec2(idx), to_ivec2(dim)) * 2.0f) - 1.0f;
+
+        // L'origine du rayon est toujours l'origine de la caméra pour une perspective
+        const float3 rayOrigin = params.camera.transform.position;
+        
+        const float halfFovHorizontal = params.camera.horizontalFieldOfView / 2.0f;
+        const float halfFovVertical = params.camera.verticalFieldOfView / 2.0f;
+        const float3 cameraLook = params.camera.getLook();
+        
+        const float threadAngleHorizontal = halfFovHorizontal * gridPos.x;
+        const float threadAngleVertical = halfFovVertical * gridPos.y;
+
+        // La taille dans le monde d'un pixel sur le plan Near
+        const glm::vec2 pixelSizeOnNearPlane = {
+            (2.0f * tan(halfFovHorizontal)) / static_cast<float>(dim.x),
+            (2.0f * tan(halfFovVertical)) / static_cast<float>(dim.y)
+        };
+        
+        // Lance le nombre désiré de rayons par pixel,
+        // Mixe la couleur en faisant la moyenne
+        float3 rayColorAverage;
+
+        {
+            float3 raysColorsSum = make_float3(0.0f);    
+            glm::uvec2 pixelRayIndex;
+            for(pixelRayIndex.x = 0; pixelRayIndex.x < params.countRaysPerPixel.x; ++pixelRayIndex.x)
+            {
+                for(pixelRayIndex.y = 0; pixelRayIndex.y < params.countRaysPerPixel.y; ++pixelRayIndex.y)
+                {
+                    // Soit le plan Near centré en 0
+                    // pixelTarget donne les coordonnées du pixel cible sur ce plan Near
+                    glm::vec2 pixelTarget = {
+                        tan(threadAngleHorizontal),
+                        tan(threadAngleVertical)
+                    };
+
+                    // Décalage propre à chaque sous-rayon pour un pixel donné
+                    const glm::vec2 pixelRayOffset =
+                        pixelSizeOnNearPlane
+                        * unNormalize(Distribution::linspace<glm::vec2>(pixelRayIndex, params.countRaysPerPixel), glm::vec2(-0.5f), glm::vec2(0.5f));
+                    
+                    pixelTarget += pixelRayOffset;
+
+                    // On considère un plan Near à z = 1.0f pour calculer les coordonnées des rayons
+                    const float3 rayDirection = normalize(cameraLook
+                        + pixelTarget.x * params.camera.getRight()
+                        + pixelTarget.y * params.camera.getUp()
+                    );
+
+                    raysColorsSum += traceRayAndGetColor(rayOrigin, rayDirection);
+                }
+            }
+            
+            rayColorAverage = raysColorsSum / (static_cast<float>(params.countRaysPerPixel.x) * static_cast<float>(params.countRaysPerPixel.y));
+        }
+        
+        uchar3& pixelRef = *params.at(idx.x, idx.y);
+        pixelRef = convertFloatToCharColor(rayColorAverage);
     }
 
     __global__ void __anyhit__my_program()
@@ -146,74 +284,23 @@ extern "C"
 
     __global__ void __closesthit__my_program()
     {
-        const Point* pointBase = *reinterpret_cast<const Point**>(optixGetSbtDataPointer());
-        const size_t primitiveIndex = optixGetPrimitiveIndex();
-        const Point& currentPoint = pointBase[primitiveIndex];
+        const size_t primitiveID = optixGetPrimitiveIndex();
+        const float3 intersectionPos = getIntersectionPos();
 
-        float3 intersectionPos = getIntersectionPos();
-        float3 normal = normalize(intersectionPos - currentPoint.pos);
+        const unsigned int u0 = optixGetPayload_0();
+        const unsigned int u1 = optixGetPayload_1();
+        Payload* const payload = reinterpret_cast<Payload*>(unpackPointer(u0, u1));
         
-        // Tracing récursif (mêmes paramètres que le programme principal)
-
-        const float3 bouncingRayOrigin = currentPoint.pos;
-        const float3 bouncingRayDirection = reflect(optixGetWorldRayDirection(), normal);
-
-        const float tmin = 0.0f;
-        const float tmax = 1e16f;
-        const float rayTime = 0.0f;
-        const unsigned int rayFlags = OPTIX_RAY_FLAG_TERMINATE_ON_FIRST_HIT;
-        const OptixVisibilityMask visibilityMask(255);
-        const unsigned int sbtOffset = 0;
-        const unsigned int sbtStride = 0;
-        const unsigned int missSbtIndex = 0;
-
-        unsigned int payload_0;
-
-        // depth = depth + 1
-        unsigned int payload_1 = optixGetPayload_1() + 1;
-
-        static const int maxDepth = 2;
-
-        uchar3 pixelColor = currentPoint.col;
-
-        if(payload_1 < maxDepth)
-        {
-            optixTrace(
-                params.traversableHandle,
-                bouncingRayOrigin,
-                bouncingRayDirection,
-                tmin,
-                tmax,
-                rayTime,
-                visibilityMask,
-                rayFlags,
-                sbtOffset,
-                sbtStride,
-                missSbtIndex,
-                payload_0,
-                payload_1
-            );
-
-            uchar3 bouncingColor = int_as_uchar3(payload_0);
-
-            // Ratio de la couleur courante à garder par rapport
-            // au prochain rayon
-            const float directColorRatio = 0.1;
-
-            pixelColor = as_uchar3(
-                as_float3(pixelColor) * directColorRatio
-                + as_float3(bouncingColor) * (1.0f - directColorRatio) 
-            );
-        }
-
-        optixSetPayload_0(uchar3_as_int(pixelColor));
+        payload->intersected = true;
+        payload->primitiveID = primitiveID;
+        payload->intersection = intersectionPos;
     }
 
     __global__ void __miss__my_program()
     {
         // Exécuté quand le rayon ne trouve pas de collision
-        // Envoyer la couleur de fond
-        optixSetPayload_0(uchar3_as_int(make_uchar3(0, 0, 0)));
+        // Ne rien faire
+        // La payload est déjà initialisé dans le programme à "intersected = false"
     }
 
     #define USE_SPHERE 1
@@ -267,10 +354,16 @@ extern "C"
     */
     __global__ void __intersection__my_program()
     {
-        const Point *pointBase = *reinterpret_cast<const Point**>(optixGetSbtDataPointer());
+        const Point* pointBase = *reinterpret_cast<const Point**>(optixGetSbtDataPointer());
         const size_t primitiveIndex = optixGetPrimitiveIndex();
         const Point& point = pointBase[primitiveIndex];
 
+        if(primitiveIndex == optixGetPayload_2())
+        {
+            // La payload 2 stocke l'index d'une primitive que l'on souhaite ignorer pour les collisions
+            return;
+        }
+        
         const float3 ray_orig = optixGetWorldRayOrigin();
         const float3 ray_dir  = optixGetWorldRayDirection();
         const float  ray_tmin = optixGetRayTmin();
@@ -279,7 +372,7 @@ extern "C"
         const float3 c = point.pos;
         const float3 A = ray_orig;
         const float3 n = ray_dir;
-        const float  r = point.r;
+        const float  r = point.r * params.pointRadiusModifier;
 
         const float eq_a = lengthSquared(n);
         const float eq_b = -2.0f * dot(c - A, n);
@@ -398,4 +491,16 @@ extern "C"
     }
 
     #endif
+
+    __global__ void __exception__my_program()
+    {
+        const int code = optixGetExceptionCode();
+        //printf("[ExceptionProgram] Error %d\n", code);
+            
+        if(code == OPTIX_EXCEPTION_CODE_TRAVERSAL_INVALID_TRAVERSABLE)
+        {
+            OptixTraversableHandle handle = optixGetExceptionInvalidTraversable();
+            //printf("[ExceptionProgram] handle = %p, params.handle = %p\n", (void*)handle, (void*)params.traversableHandle);
+        }
+    }
 }

@@ -2,6 +2,21 @@
 #define HELPER_CONVERSION_H
 
 #include <cuda_runtime.h>
+#include <glm/glm.hpp>
+
+// Conversions CUDA => GLM
+
+template<typename Vec>
+inline __host__ __device__ glm::ivec2 to_ivec2(const Vec& vec)
+{
+    return {vec.x, vec.y};
+}
+
+template<typename Vec>
+inline __host__ __device__ glm::vec2 to_vec2(const Vec& vec)
+{
+    return {vec.x, vec.y};
+}
 
 inline __host__ __device__ int uchar4_as_int(uchar4 u)
 {

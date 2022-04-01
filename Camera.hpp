@@ -13,7 +13,7 @@ struct Camera
      * Cette fonction permet d'obtenir le FOV horizontal en connaissant
      * ces deux autres paramètres.
      * @param verticalFieldOfView Le FOV sur l'axe vertical de l'écran.
-     * @param aspectRatio Le ratio écran x/y,
+     * @param aspectRatio Le ratio écran width/height en pixels
      */
     static float verticalToHorizontalFieldOfView(float verticalFieldOfView, float aspectRatio)
     {

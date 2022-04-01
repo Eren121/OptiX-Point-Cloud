@@ -3,21 +3,8 @@
 #include <cuda_runtime.h>
 #include <optix.h>
 
+#include "common.hpp"
 #include "Camera.hpp"
-
-// Structure utilitaire, stocke le pointeur de données de l'AS et le pointeur OptiX
-// La seule raison d'être de cette classe est de pouvoir désallouer l'AS en gardant un pointeur vers le stockage.
-// Il existe une fonction pour convertir un pointeur en OptixTraversableHandle (optixConvertPointerToTraversableHandle())
-// Mais il est plus simple de stocker les deux soi-même.
-struct TraversableHandleStorage {
-
-    // handle référence une case mémoire dans d_output
-    OptixTraversableHandle handle = {};
-
-    // Stockage. OptiX n'alloue aucune mémoire, on doit allouer nous même
-    // Pour détruire l'AS, il suffira donc de désallouer d_output.
-    CUdeviceptr d_output = {};  
-};
 
 // La structure est read-only sur le GPU!!
 // Mais elle peut contenir un pointeur vers une zone où l'on peut écrire
@@ -47,6 +34,30 @@ struct Params
     float pointSize = 1.0f;
 
     Camera camera;
+
+    float3 lightDirection = normalize(make_float3(1.0f, -1.0f, 1.0f));
+
+    bool shadowRayEnabled = true;
+
+    /**
+     * La taille des points est multiplié par ce nombre.
+     * Attention, cela ne modifie pas la taille des AABB pour les collisions, mais uniquement
+     * la taille une fois que l'on sait que l'on est dans l'AABB de la sphère.
+     * Si pointRadiusModifier >= sqrt(3.0f), alors le point aura toujours l'apparence d'un cube,
+     * car sqrt(3.0f) est la longueur de la diagonale d'un cube de côté 1
+     * Sphère circonscrite au cube, le cube est entièrement contenu dans la sphère (AABB).
+     */
+    float pointRadiusModifier = 1.0f;
+    
+    /**
+     * Combien de rayons tirer par pixels.
+     * La distribution des rayons peut-être faite de façon régulière ou aléatoire (Monte-Carlo).
+     * Au total, on a donc countRaysPerPixel.x * countRaysPerPixel.y rayons qui sont tirés par pixel.
+     */
+    glm::uvec2 countRaysPerPixel = {1, 1};
+
+
+    unsigned long frame = 0;
 };
 
 extern "C" __constant__ Params params;

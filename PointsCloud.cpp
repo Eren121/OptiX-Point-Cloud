@@ -125,7 +125,7 @@ void PointsCloud::readPlyFile(const std::string & filepath, const bool preload_i
 
             if(v_radius) {
                 p.r = (*v_radius)[i];
-                p.r *= 0.0005f;
+                p.r *= 0.0009f;
                 //p.r *= SCALE;
                 //p.r = 0.0001f;
             }
