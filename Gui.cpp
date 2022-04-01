@@ -1,5 +1,5 @@
 #include "Gui.hpp"
-#include "C:\Users\Raphael\Documents\RT1001_ProjetOptiX\thirdparty\imgui\imgui.h"
+#include "imgui.h"
 #include "helper_math.h"
 #include "Distribution.hpp"
 
