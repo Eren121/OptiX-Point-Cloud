@@ -461,6 +461,8 @@ TraversableHandleStorage createAccelerationStructure(OptixDeviceContext context,
     return outputHandle;
 }
 
+#ifndef NOMAIN
+
 int main(int argc, char **argv)
 {
     Gui gui;
@@ -545,10 +547,10 @@ const char* path = R"(../data/bunny/reconstruction/bun_zipper.ply)";
     Record<void*> exceptionRecord;
     exceptionRecord.fill(exceptionGroup);
 
-    managed_device_ptr d_raygenRecord = managed_device_ptr::copyFrom(raygenRecord);
-    managed_device_ptr d_missRecord = managed_device_ptr::copyFrom(missRecord);
-    managed_device_ptr d_hitgroupRecord = managed_device_ptr::copyFrom(hitgroupRecord);
-    managed_device_ptr d_exceptionRecord = managed_device_ptr::copyFrom(exceptionRecord);
+    managed_device_ptr d_raygenRecord = managed_device_ptr::create_from(raygenRecord);
+    managed_device_ptr d_missRecord = managed_device_ptr::create_from(missRecord);
+    managed_device_ptr d_hitgroupRecord = managed_device_ptr::create_from(hitgroupRecord);
+    managed_device_ptr d_exceptionRecord = managed_device_ptr::create_from(exceptionRecord);
 
     // définir au minimum le raygenRecord et le missRecord
     OptixShaderBindingTable sbt = {};
@@ -733,3 +735,5 @@ const char* path = R"(../data/bunny/reconstruction/bun_zipper.ply)";
     printf("Programme termine avec succes.\n");
     return EXIT_SUCCESS;
 }
+
+#endif
