@@ -11,8 +11,9 @@ set(CMAKE_CUDA_ARCHITECTURES 61-virtual) # -virtual pour éviter une erreur de c
 set(CMAKE_CXX_STANDARD 17)
 
 set(BUILD_TESTS OFF)
-set(MY_PTX_PATH ${CMAKE_BINARY_DIR}/cudaLib.dir/Debug/ray.ptx)
-add_compile_definitions(MY_PTX_PATH=\"${MY_PTX_PATH}\")
+add_compile_definitions(MY_PTX_PATH=\"ray.ptx\")
+
+set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -DDEBUG")
 
 find_package(CUDA REQUIRED)
 
@@ -35,7 +36,8 @@ list(APPEND SRC main.cpp stb.cpp Application.cpp Application.h ray.cuh common.hp
     core/cuda/check.cpp
     core/cuda/managed_device_ptr.cpp
     core/optix/stubs.cpp
-    core/optix/check.cpp)
+    core/optix/check.cpp
+    core/utility/time.cpp)
 
 include_directories(.)
 
@@ -43,7 +45,7 @@ add_executable(${EXE} ${SRC})
 
 find_package(CUDA REQUIRED)
 
-add_library(cudaLib OBJECT ray.cu ray.cuh)
+add_library(cudaLib OBJECT ray.cu)
 target_link_libraries(cudaLib ${CUDA_LIBRARIES})
 
 target_compile_options(cudaLib PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:
@@ -52,15 +54,14 @@ target_compile_options(cudaLib PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:
                        >)
                        
 # Pour générer des PTX au lieu de OBJ (PTX = fichier bytecode intermédiaire OptiX)
-set_property(TARGET cudaLib PROPERTY CUDA_PTX_COMPILATION ON)
+set_target_properties(cudaLib PROPERTIES CUDA_PTX_COMPILATION ON)
 target_link_libraries(${EXE} ${CUDA_LIBRARIES})
 
 # Le PTX est un fichier texte qu'il faudra lire
 # On définit la macro MY_PTX_PATH qui contient le chemin
-get_target_property(PTX_DIR cudaLib BINARY_DIR)
+get_target_property(PTX_DIR ${EXE} BINARY_DIR)
 
 message(STATUS "PTX dir: ${PTX_DIR}")
-message(STATUS )
 
 target_compile_definitions(${EXE} PRIVATE _USE_MATH_DEFINES)
 target_compile_definitions(cudaLib PRIVATE _USE_MATH_DEFINES)
@@ -100,8 +101,25 @@ foreach(cpp_path ${examples_file_cpp})
     add_executable(${target} ${SRC} ${cpp_path})
     target_link_libraries(${target} ${CUDA_LIBRARIES} imgui glfw glad tinyply glm)
     target_compile_definitions(${target} PRIVATE NOMAIN) # Pour  que main.cpp ne définisse pas main()
-
+    
     message(STATUS ">>> Create test target '${target}' (${cpp_path})")
     add_test(NAME ${target} COMMAND ${target})
 
 endforeach()
+
+### Permet de compiler les PTX quand on recompile juste l'exe
+### et que le code des PTX change
+### Pour une raison target_link_libraries(${EXE} cudaLib) ne fonctionne pas
+add_dependencies(${EXE} cudaLib)
+
+### Copier les PTX dans le répertoire de l'exe
+add_custom_command(
+    TARGET ${EXE} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E
+        echo ">>> Copy shaders files:" $<TARGET_OBJECTS:cudaLib> "to executable directory ($<TARGET_FILE_DIR:${EXE}>)")
+
+
+add_custom_command(
+    TARGET ${EXE} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E
+        copy_if_different $<TARGET_OBJECTS:cudaLib>  $<TARGET_FILE_DIR:${EXE}>)

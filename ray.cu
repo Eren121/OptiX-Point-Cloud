@@ -3,9 +3,11 @@
 #include "Record.hpp"
 #include <cuda_runtime.h>
 #include "helper_math.h"
+#include "core/cuda/math.h"
 #include "Point.h"
 #include <climits>
 #include "Distribution.hpp"
+#include "core/utility/ArrayView.h"
 
 texture<uchar4, 2, cudaReadModeElementType> texRef;
 
@@ -226,14 +228,27 @@ extern "C"
         // Lance le nombre désiré de rayons par pixel,
         // Mixe la couleur en faisant la moyenne
         float3 rayColorAverage;
+        
+        const uint numSubPixels = params.countRaysPerPixel.x * params.countRaysPerPixel.y;
+        const uint subPixelIdx = optixGetLaunchIndex().z;
 
         {
             float3 raysColorsSum = make_float3(0.0f);    
             glm::uvec2 pixelRayIndex;
+
+            #if !OPTIMIZE_SUPERSAMPLE
             for(pixelRayIndex.x = 0; pixelRayIndex.x < params.countRaysPerPixel.x; ++pixelRayIndex.x)
+            #endif
             {
+                #if !OPTIMIZE_SUPERSAMPLE
                 for(pixelRayIndex.y = 0; pixelRayIndex.y < params.countRaysPerPixel.y; ++pixelRayIndex.y)
+                #endif
                 {
+                    #if OPTIMIZE_SUPERSAMPLE
+                    pixelRayIndex.x = subPixelIdx % params.countRaysPerPixel.x;
+                    pixelRayIndex.y = subPixelIdx / params.countRaysPerPixel.x;
+                    #endif
+
                     // Soit le plan Near centré en 0
                     // pixelTarget donne les coordonnées du pixel cible sur ce plan Near
                     glm::vec2 pixelTarget = {
@@ -257,12 +272,24 @@ extern "C"
                     raysColorsSum += traceRayAndGetColor(rayOrigin, rayDirection);
                 }
             }
-            
-            rayColorAverage = raysColorsSum / (static_cast<float>(params.countRaysPerPixel.x) * static_cast<float>(params.countRaysPerPixel.y));
+
+            #if OPTIMIZE_SUPERSAMPLE
+                // 1 seul pixel, donc avg = sum
+                rayColorAverage = raysColorsSum;
+            #else
+                rayColorAverage = raysColorsSum / (static_cast<float>(numSubPixels));
+            #endif
         }
         
-        uchar3& pixelRef = *params.at(idx.x, idx.y);
-        pixelRef = convertFloatToCharColor(rayColorAverage);
+
+        #if OPTIMIZE_SUPERSAMPLE
+            ArrayView<uchar3, 3> view(params.image, params.height, params.width, numSubPixels);
+            view(idx.y, idx.x, subPixelIdx) = convertFloatToCharColor(rayColorAverage);
+        #else
+            ArrayView<uchar3, 2> view(params.image, params.height, params.width);
+            view(idx.y, idx.x) = convertFloatToCharColor(rayColorAverage);
+        #endif
+
     }
 
     __global__ void __anyhit__my_program()

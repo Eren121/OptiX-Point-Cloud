@@ -6,12 +6,14 @@
 #include "common.hpp"
 #include "Camera.hpp"
 
+#define OPTIMIZE_SUPERSAMPLE 1
+
 // La structure est read-only sur le GPU!!
 // Mais elle peut contenir un pointeur vers une zone où l'on peut écrire
 struct Params
 {
     // Données de l'image, en row-major (nécessaire pour stbi_write)
-    uchar3 *image = nullptr;
+    uchar3* image = nullptr;
 
     unsigned int width, height;
 

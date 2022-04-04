@@ -19,8 +19,10 @@ __global__ void kernelSuperSamplingInterpolation(
     const int px = blockIdx.x * blockDim.x + threadIdx.x;
     const int py = blockIdx.y * blockDim.y + threadIdx.y;
 
-    ArrayView<SuperSampling::Pixel, 2> output(outputBuf, width, height);
-    ArrayView<const SuperSampling::Pixel, 3> input(inputBuf, width, height, subPixelsCount);
+    // OpenGL / CUDA est row-major
+    // Donc la height en 1ière dimension
+    ArrayView<SuperSampling::Pixel, 2> output(outputBuf, height, width);
+    ArrayView<const SuperSampling::Pixel, 3> input(inputBuf, height, width, subPixelsCount);
 
     if(px < width && py < height)
     {
@@ -28,14 +30,14 @@ __global__ void kernelSuperSamplingInterpolation(
     
         for(int subPx = 0; subPx < subPixelsCount; subPx++)
         {
-            const uchar3 sub = input(px, py, subPx);
+            const uchar3& sub = input(py, px, subPx);
             total.x += sub.x;
             total.y += sub.y;
             total.z += sub.z;
         }
         
         const float3 avg = total / static_cast<float>(subPixelsCount);
-        output(px, py) = make_uchar3(avg.x, avg.y, avg.z);
+        output(py, px) = make_uchar3(avg.x, avg.y, avg.z);
     }
 }
 

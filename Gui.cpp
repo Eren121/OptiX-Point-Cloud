@@ -2,6 +2,7 @@
 #include "imgui.h"
 #include "helper_math.h"
 #include "Distribution.hpp"
+#include "core/utility/time.h"
 
 void Gui::draw(Params& params, OrbitalControls& orbitalControls)
 {
@@ -108,6 +109,17 @@ s
         if(ImGui::CollapsingHeader("Debug"))
         {
             ImGui::Checkbox("ImGUI demo", &showDemoWindow);
+
+            {
+                static double previousTime = getTimeInSeconds();
+                const double currentTime = getTimeInSeconds();
+                
+                const double frameTimeMillis = (currentTime - previousTime) * 1000.0;
+
+                ImGui::Text("frame time: %.2lf ms", frameTimeMillis);
+
+                previousTime = currentTime;
+            }
         }
     }
     ImGui::End();

@@ -18,8 +18,12 @@
 #include "OrbitalControls.hpp"
 #include "Scene.hpp"
 #include "Gui.hpp"
+#include "core/utility/debug.h"
+#include "core/SuperSampling.h"
 
 std::unique_ptr<PointsCloud> points;
+
+const bool optixDebugOn = DEBUG_ENABLED;
 
 // Fonction utilitaire pour lire tout un fichier dans une string
 std::string readAllFile(const char *path)
@@ -92,18 +96,29 @@ const OptixPipelineCompileOptions* getPipelineCompileOptions()
 
     // Pour debugger
     // _NONE en release
-    pipelineCompileOptions.exceptionFlags =
-        OPTIX_EXCEPTION_FLAG_DEBUG |
-        OPTIX_EXCEPTION_FLAG_TRACE_DEPTH |
-        OPTIX_EXCEPTION_FLAG_STACK_OVERFLOW |
-        OPTIX_EXCEPTION_FLAG_USER;
+    if(optixDebugOn)
+    {
+        pipelineCompileOptions.exceptionFlags =
+            OPTIX_EXCEPTION_FLAG_DEBUG |
+            OPTIX_EXCEPTION_FLAG_TRACE_DEPTH |
+            OPTIX_EXCEPTION_FLAG_STACK_OVERFLOW |
+            OPTIX_EXCEPTION_FLAG_USER;
+    }
+    else
+    {
+        pipelineCompileOptions.exceptionFlags = OPTIX_EXCEPTION_FLAG_NONE;
+    }
 
     // Comme cet exemple n'a qu'une seule structure d'accélération,
     // cette option est nécessaire sinon erreur OPTIX_EXCEPTION_CODE_UNSUPPORTED_SINGLE_LEVEL_GAS
-    // CHANGEMENT: on utilise maintenant une IAS pour mixer custom primitives / curves dans on retire l'options
+
+    // CHANGEMENT: on utilise maintenant une IAS pour mixer custom primitives / curves
+    // Donc on utilise OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_LEVEL_INSTANCING
+    // Cela marcherait aussi avec OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_ANY
+    // mais ça serait moins optimisé
     pipelineCompileOptions.traversableGraphFlags =
         //OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_LEVEL_INSTANCING | OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_GAS;
-        OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_ANY;
+        OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_LEVEL_INSTANCING;
 
     return &pipelineCompileOptions;
 }
@@ -118,11 +133,25 @@ OptixModule createModule(OptixDeviceContext context)
 
     // Un peu comme les options de gcc -O1, -O2, -O3.
     // En Debug il vaut mieux mettre à 0, et OPTIX_COMPILE_OPTIMIZATION_LEVEL_DEFAULT en Release.
-    moduleCompileOptions.optLevel = OPTIX_COMPILE_OPTIMIZATION_LEVEL_0;
+    if(optixDebugOn)
+    {
+        moduleCompileOptions.optLevel = OPTIX_COMPILE_OPTIMIZATION_LEVEL_0;
+    }
+    else
+    {
+        moduleCompileOptions.optLevel = OPTIX_COMPILE_OPTIMIZATION_LEVEL_3;
+    }
 
     // Informations de debugging. Un peu comme l'option de gcc -g.
     // En Debug il vaut mieux mettre à OPTIX_COMPILE_DEBUG_LEVEL_FULL, et en Release à OPTIX_COMPILE_DEBUG_LEVEL_DEFAULT.
-    moduleCompileOptions.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
+    if(optixDebugOn)
+    {
+        moduleCompileOptions.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
+    }
+    else
+    {
+        moduleCompileOptions.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_NONE;
+    }
 
     // Lit le programme assembleur du fichier
     const std::string ptxContent = readAllFile(MY_PTX_PATH);
@@ -190,7 +219,15 @@ OptixPipeline createPipeline(OptixDeviceContext context,
     OptixPipeline pipeline = nullptr;
     OptixPipelineLinkOptions pipelineLinkOptions = {};
     pipelineLinkOptions.maxTraceDepth = 3;
-    pipelineLinkOptions.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
+
+    if(optixDebugOn)
+    {
+        pipelineLinkOptions.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
+    }
+    else
+    {
+        pipelineLinkOptions.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_NONE;
+    }
 
     OptixProgramGroupOptions pgOptions = {};
     OPTIX_CHECK(optixPipelineCreate(
@@ -234,14 +271,28 @@ OptixDeviceContext createContext()
     //      3: [Avertissements]: quand par exemple OptiX détecte que le programme ne se comporte pas exactement comme demandé
     //         ou plus lentement que prévu (avec par exemple une mauvaise combinaison d'options)
     //      4: Info
-    options.logCallbackLevel = 3; // Ici, on affiche tout pour bien debugger
+    if(optixDebugOn)
+    {
+        options.logCallbackLevel = 3; // Ici, on affiche tout pour bien debugger
+    }
+    else
+    {
+        options.logCallbackLevel = 0;
+    }
 
 
     // Vérifications d'erreurs en bonus à l'exécution
     // Cela permet encore de débugger, mais cela a un coût et peut ralentir le programme.
     // En Debug on pourra mettre OPTIX_DEVICE_CONTEXT_VALIDATION_MODE_ALL qui permet d'activer toutes les options bonus.
     // En Release on pourra mettre OPTIX_DEVICE_CONTEXT_VALIDATION_MODE_OFF.
-    options.validationMode = OPTIX_DEVICE_CONTEXT_VALIDATION_MODE_ALL;
+    if(optixDebugOn)
+    {
+        options.validationMode = OPTIX_DEVICE_CONTEXT_VALIDATION_MODE_ALL;
+    }
+    else
+    {
+        options.validationMode = OPTIX_DEVICE_CONTEXT_VALIDATION_MODE_OFF;
+    }
 
     // Création du contexte et vérification des erreurs
     OptixDeviceContext context = nullptr;
@@ -467,7 +518,7 @@ int main(int argc, char **argv)
 {
     Gui gui;
 
-const char* path = R"(../data/bunny/reconstruction/bun_zipper.ply)";
+    const char* path = R"(../../data/bunny/reconstruction/bun_zipper.ply)";
     points = std::make_unique<PointsCloud>(path);
     //points->randomizeColors();
     // ====== Initialisation ======
@@ -524,7 +575,7 @@ const char* path = R"(../data/bunny/reconstruction/bun_zipper.ply)";
                                              &direct_callable_stack_size_from_state, &continuation_stack_size ) );
     OPTIX_CHECK( optixPipelineSetStackSize( pipeline, direct_callable_stack_size_from_traversal,
                                             direct_callable_stack_size_from_state, continuation_stack_size,
-                                            4  // maxTraversableDepth
+                                            2  // maxTraversableDepth
                                             ) );
     
     // ====== Création des paramètres à envoyer au GPU pour le ray tracing ======
@@ -584,7 +635,7 @@ const char* path = R"(../data/bunny/reconstruction/bun_zipper.ply)";
         glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
 
         // Contient les pixels de la fenêtre (= framebuffer) sous forme d'un pointeur vers le GPU.
-        cudaGraphicsResource *textureResource = nullptr;
+        cudaGraphicsResource* textureResource = nullptr;
 
         // Indique à OpenGL que la texture sera utilisée à la fois par CUDA et OpenGL
         // On veut écrire l'image avec CUDA et l'afficher avec OpenGL d'où CU_GRAPHICS_REGISTER_FLAGS_WRITE_DISCARD.
@@ -620,7 +671,7 @@ const char* path = R"(../data/bunny/reconstruction/bun_zipper.ply)";
                    lengthSquared(b.pos - orbitalControls.cameraTarget);
         });
 
-        const float arbitraryDistanceFactor = 2.5f;
+        const float arbitraryDistanceFactor = 1.0f;
         orbitalControls.cameraDistanceToTarget = length(furthestPoint.pos - orbitalControls.cameraTarget) * arbitraryDistanceFactor;
 
         orbitalControls.horizontalAngle = my::pi / 4.0f;
@@ -665,47 +716,91 @@ const char* path = R"(../data/bunny/reconstruction/bun_zipper.ply)";
             previousPos = currentPos;
         });
 
+        SuperSampling supersampling(params.width, params.height, 16);
+
         app.onDraw = [&]() {
 
-            
-            CUDA_CHECK(cudaGraphicsMapResources(1, &textureResource, stream));
-
-            // http://cuda-programming.blogspot.com/2013/02/cuda-array-in-cuda-how-to-use-cuda.html
-            void *d_image = nullptr;
-            size_t sizeInBytes;
-            
-            // Récupère le pointeur de la texture mappé sur CUDA (aussi dans le GPU...)
-            CUDA_CHECK(cudaGraphicsResourceGetMappedPointer(&d_image, &sizeInBytes, textureResource));
-            
-            glBindTexture(GL_TEXTURE_2D, rect->getTexture());
-            glBindBuffer(GL_PIXEL_UNPACK_BUFFER, pbo);
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, 0);
-            glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
-
-            // Détruit la ressource d'interoperabilité CUDA, à chaque frame
-            CUDA_CHECK(cudaGraphicsUnmapResources(1, &textureResource, stream));
+            params.countRaysPerPixel.x = 4;
+            params.countRaysPerPixel.y = 4;
 
             orbitalControls.applyToCamera(params.camera, my::radians(70.0f), static_cast<float>(width) / height);
-            params.image = reinterpret_cast<uchar3*>(d_image);
+
+            // Map la texture OpenGL dans un tableau CUDA,
+            // Puis effectue l'interpolation sur ce tableau
+            // http://cuda-programming.blogspot.com/2013/02/cuda-array-in-cuda-how-to-use-cuda.html
             
-            // Copier params sur le GPU
-            managed_device_ptr d_params(&params, sizeof(params));
-    
-            const unsigned int depth = 1;
+            if(OPTIMIZE_SUPERSAMPLE)
+            {
+                params.image = supersampling.getBufferDeviceData();
+                managed_device_ptr d_params(&params, sizeof(params)); // Copier params sur le GPU
 
-            OPTIX_CHECK(optixLaunch(
-                pipeline,
-                stream,
-                d_params, d_params.size(),
-                &sbt,
-                params.width, params.height, depth
-            ));
+                const unsigned int depth = params.countRaysPerPixel.x * params.countRaysPerPixel.y;
+                OPTIX_CHECK(optixLaunch(
+                    pipeline,
+                    stream,
+                    d_params, d_params.size(),
+                    &sbt,
+                    params.width, params.height, depth
+                ));
 
+                CUDA_CHECK(cudaDeviceSynchronize());
+
+                {
+                    CUDA_CHECK(cudaGraphicsMapResources(1, &textureResource, stream));
+
+                    void* d_image = nullptr;
+                    size_t sizeInBytes;
+                    
+                    // Récupère le pointeur de la texture mappé sur CUDA (aussi dans le GPU...)
+                    CUDA_CHECK(cudaGraphicsResourceGetMappedPointer(&d_image, &sizeInBytes, textureResource));
+                    
+                    supersampling.interpolate(reinterpret_cast<uchar3*>(d_image));
+                    
+                    glBindTexture(GL_TEXTURE_2D, rect->getTexture());
+                    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, pbo);
+                    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, 0);
+                    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+
+                    // Détruit la ressource d'interoperabilité CUDA, à chaque frame
+                    CUDA_CHECK(cudaGraphicsUnmapResources(1, &textureResource, stream));
+                }
+            }
+            else
+            {
+                CUDA_CHECK(cudaGraphicsMapResources(1, &textureResource, stream));
+
+                void* d_image = nullptr;
+                size_t sizeInBytes;
+                
+                // Récupère le pointeur de la texture mappé sur CUDA (aussi dans le GPU...)
+                CUDA_CHECK(cudaGraphicsResourceGetMappedPointer(&d_image, &sizeInBytes, textureResource));
+                
+                params.image = reinterpret_cast<uchar3*>(d_image);
+                managed_device_ptr d_params(&params, sizeof(params)); // Copier params sur le GPU
+
+                const unsigned int depth = 1;
+                OPTIX_CHECK(optixLaunch(
+                    pipeline,
+                    stream,
+                    d_params, d_params.size(),
+                    &sbt,
+                    params.width, params.height, depth
+                ));
+
+                glBindTexture(GL_TEXTURE_2D, rect->getTexture());
+                glBindBuffer(GL_PIXEL_UNPACK_BUFFER, pbo);
+                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, 0);
+                glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+
+                // Détruit la ressource d'interoperabilité CUDA, à chaque frame
+                CUDA_CHECK(cudaGraphicsUnmapResources(1, &textureResource, stream));
+            }
+            
             // Utile ?
             CUDA_CHECK(cudaDeviceSynchronize());
 
             rect->draw();
-
+            
             gui.draw(params, orbitalControls);
             
             params.frame++;

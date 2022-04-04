@@ -28,8 +28,8 @@ public:
      * @param d_output Image de sortie Pixel* sur le device imageWidth x imageHeight
      */
     void interpolate(Pixel* d_output);
-
-    managed_device_ptr& getDeviceBuffer() { return m_d_buffer; }
+    
+    uchar3* getBufferDeviceData() { return m_d_buffer.as<uchar3>(); }
     
 private:
     /**
