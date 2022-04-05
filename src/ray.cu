@@ -316,9 +316,9 @@ extern "C"
     __device__ float3 getIntersectionPos()
     {
         float3 intersectionPos;
-        intersectionPos.x = int_as_float(optixGetAttribute_1());
-        intersectionPos.y = int_as_float(optixGetAttribute_2());
-        intersectionPos.z = int_as_float(optixGetAttribute_3());
+        intersectionPos.x = int_as_float(optixGetAttribute_0());
+        intersectionPos.y = int_as_float(optixGetAttribute_1());
+        intersectionPos.z = int_as_float(optixGetAttribute_2());
 
         return intersectionPos;
     }
@@ -381,7 +381,6 @@ extern "C"
         const float3 intersectPos = rayOrigin + t * rayDirection;
         
         optixReportIntersection(t, hitKind,
-            optixGetPrimitiveIndex(),
             float_as_int(intersectPos.x),
             float_as_int(intersectPos.y),
             float_as_int(intersectPos.z));
@@ -389,9 +388,7 @@ extern "C"
 
     /**
     * @brief Programme d'intersection avec des sphères.
-    * Position de la collision (x, y, z) stockée dans les attributs 1, 2 et 3
-    * en float.
-    * Index de la primitive stocké dans l'attribut 0
+    * Position de la collision (x, y, z) stockée dans les attributs 0, 1, 2
     */
     __global__ void __intersection__my_program()
     {

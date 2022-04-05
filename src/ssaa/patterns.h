@@ -22,6 +22,6 @@ inline __device__ __host__ void ssaa_random(SsaaContext& ctxt)
     const float2 id = make_float2(ctxt.id);
     const float2 numRays = make_float2(ctxt.numRays);
 
-    ctxt.out_pos.x = curand(ctxt.rand) / UINT_MAX;
-    ctxt.out_pos.y = curand(ctxt.rand) / UINT_MAX;
+    ctxt.out_pos.x = curand_uniform(ctxt.rand);
+    ctxt.out_pos.y = curand_uniform(ctxt.rand);
 }

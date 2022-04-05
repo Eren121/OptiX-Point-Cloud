@@ -120,7 +120,7 @@ void PointsCloud::readPlyFile(const std::string & filepath, const bool preload_i
                 p.col = (*v_colors)[i];
             }
             else {
-                p.col = make_uchar3(255, 255, 255);
+                p.col = make_uchar3(rand(), rand(), rand());
             }
 
             if(v_radius) {

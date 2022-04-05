@@ -1,4 +1,4 @@
-#include "core/SuperSampling.h"
+#include "ssaa/SuperSampling.h"
 #include "core/utility/ArrayView.h"
 #include "stb_image_write.h"
 #include <vector>

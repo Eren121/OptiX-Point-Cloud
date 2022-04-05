@@ -43,13 +43,13 @@ project(TestOptiX LANGUAGES CXX CUDA)
         Scene.hpp Scene.cpp
         Distribution.hpp Distribution.cpp
         Gui.hpp Gui.cpp
-        core/SuperSampling.cu
         core/cuda/check.cpp
         core/cuda/managed_device_ptr.cpp
         core/cuda/StreamScatter.cpp
         core/optix/stubs.cpp
         core/optix/check.cpp
-        core/utility/time.cpp)
+        core/utility/time.cpp
+        ssaa/SuperSampling.cu)
 
     list(TRANSFORM COMMON_SRC PREPEND ${SRC_DIR})
     add_library(commonLib ${COMMON_SRC})

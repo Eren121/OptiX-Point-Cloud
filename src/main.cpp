@@ -18,10 +18,10 @@
 #include "OrbitalControls.hpp"
 #include "Scene.hpp"
 #include "Gui.hpp"
-#include "core/SuperSampling.h"
 #include "core/utility/debug.h"
 #include "core/utility/time.h"
 #include "core/cuda/StreamScatter.h"
+#include "ssaa/SuperSampling.h"
 #include "ssaa/patterns.h"
 
 std::unique_ptr<PointsCloud> points;
@@ -88,7 +88,7 @@ const OptixPipelineCompileOptions* getPipelineCompileOptions()
     // Pour notre programme d'intersection de sphères,
     // on utilise 4 attributs pour la position (x, y, z) de collision
     // et l'index de la sphère
-    pipelineCompileOptions.numAttributeValues = 4;
+    pipelineCompileOptions.numAttributeValues = 3;
 
     pipelineCompileOptions.pipelineLaunchParamsVariableName = "params";
 
@@ -121,7 +121,7 @@ const OptixPipelineCompileOptions* getPipelineCompileOptions()
     // mais ça serait moins optimisé
     pipelineCompileOptions.traversableGraphFlags =
         //OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_LEVEL_INSTANCING | OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_GAS;
-        OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_LEVEL_INSTANCING;
+        OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_GAS;
 
     return &pipelineCompileOptions;
 }
@@ -572,12 +572,15 @@ int main(int argc, char **argv)
     const auto numPoints = points->getPoints().size();
 
     TraversableHandleStorage traversableHandleStorage = createAccelerationStructure(
-        context, stream, beginPoints, beginPoints + numPoints / 2);
+        context, stream, beginPoints, endPoints);
 
-    TraversableHandleStorage traversableHandleStorage2 = createAccelerationStructure(
-        context, stream, beginPoints + numPoints / 2, endPoints);
+    //TraversableHandleStorage traversableHandleStorage = createAccelerationStructure(
+    //    context, stream, beginPoints, beginPoints + numPoints / 2);
 
-    TraversableHandleStorage ias = mergeGASIntoIAS(context, stream, traversableHandleStorage.handle, traversableHandleStorage2.handle);
+    //TraversableHandleStorage traversableHandleStorage2 = createAccelerationStructure(
+    //    context, stream, beginPoints + numPoints / 2, endPoints);
+
+    //TraversableHandleStorage ias = mergeGASIntoIAS(context, stream, traversableHandleStorage.handle, traversableHandleStorage2.handle);
 
     /*
     OptixStackSizes stack_sizes = {};
@@ -643,8 +646,9 @@ int main(int argc, char **argv)
 
     
     {
-        const int width = 1920;
-        const int height = 1080;
+        const int resolutionFactor = 4;
+        const int width = 1920 / resolutionFactor;
+        const int height = 1080 / resolutionFactor;
         Application app(width, height);
 
         // Contient la texture qui sera affiché sur toute la fenêtre à chaque Frame, et le VAO et le VBO associés à la texture.        
@@ -706,7 +710,7 @@ int main(int argc, char **argv)
         params.camera.origin.z = 300;
         params.width = width;
         params.height = height;
-        params.traversableHandle = ias.handle;
+        params.traversableHandle = traversableHandleStorage.handle;
 
         glfwSetScrollCallback(app.getWindow(), [](GLFWwindow*, double xoffset, double yoffset) {
 
