@@ -1,6 +1,6 @@
 #pragma once
 
-#include "helper_math.h"
+#include "detail/helper_math.h"
 
 // Ajoute quelques éléments qui ne sont pas dans l'utilitaire fournit par Nvidia
 
@@ -12,7 +12,7 @@ using uchar = unsigned char;
  *
  * @return ceil(num / den)
  *
- * @remarks uint Car c'est le type de dim3.x, etc de la classe de CUDA dim3.
+ * @remarks uint Car c'est le type de dim3.x, etc de la classe de CUDA dim2 ou dim3.
  */
 inline __host__ __device__ uint ceil_div(uint num, uint den)
 {

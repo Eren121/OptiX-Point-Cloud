@@ -8,6 +8,10 @@ void Gui::draw(Params& params, OrbitalControls& orbitalControls)
 {
     const ImGuiTreeNodeFlags nodeFlags = ImGuiTreeNodeFlags_DefaultOpen;
     
+    static double previousTime = getTimeInSeconds();
+    const double currentTime = getTimeInSeconds();
+    const double frameTimeMillis = (currentTime - previousTime) * 1000.0;
+
     if(showDemoWindow)
     {
         ImGui::ShowDemoWindow(&showDemoWindow);
@@ -66,9 +70,9 @@ void Gui::draw(Params& params, OrbitalControls& orbitalControls)
         }
         if(ImGui::CollapsingHeader("Ray casting"))
         {
-            glm::ivec2 countRaysPerPixel = params.countRaysPerPixel;
-            ImGui::SliderInt2("Rayons par pixel", &countRaysPerPixel.x, 1, 10);
-                
+            int2 numRays = params.ssaaParams.numRays;
+            ImGui::SliderInt2("Rayons par pixel", &numRays.x, 1, 10);
+            
             /*
             // Inspiré en grande partie de la partie "Canvas" de la démo ImGui.
             // Note: pour ImGUI, le curseur signifie la position actuel de rendu (et pas la souris de l'utilisateur)
@@ -103,24 +107,18 @@ s
 
                 draw_list->PushClipRect(canvas_p0, canvas_p1, true);
             }*/
-
-            params.countRaysPerPixel = countRaysPerPixel;
         }
         if(ImGui::CollapsingHeader("Debug"))
         {
             ImGui::Checkbox("ImGUI demo", &showDemoWindow);
 
             {
-                static double previousTime = getTimeInSeconds();
-                const double currentTime = getTimeInSeconds();
-                
-                const double frameTimeMillis = (currentTime - previousTime) * 1000.0;
-
                 ImGui::Text("frame time: %.2lf ms", frameTimeMillis);
-
-                previousTime = currentTime;
+                ImGui::Text("interpolation time: %.2lf ms", performanceInfo.interpolationTimeInSeconds * 1000.0);
             }
         }
     }
     ImGui::End();
+
+    previousTime = currentTime;
 }

@@ -6,6 +6,8 @@
 #include "common.hpp"
 #include "Camera.hpp"
 
+#include "ssaa/Parameters.h"
+
 #define OPTIMIZE_SUPERSAMPLE 1
 
 // La structure est read-only sur le GPU!!
@@ -15,12 +17,22 @@ struct Params
     // Données de l'image, en row-major (nécessaire pour stbi_write)
     uchar3* image = nullptr;
 
-    unsigned int width, height;
+    /**
+     * Décalage à prendre en compte pour projeter le rayon sur la caméra
+     * Cela permet de lancer plusieurs shaders en parallèle dans différents streams
+     */
+    uint2 offsetIdx = {};
+
+    /**
+     * Taille de l'écran
+     */
+    uint width = 0;
+    uint height = 0;
 
     // Contient toute les géométries de la scène
-    OptixTraversableHandle traversableHandle;
+    OptixTraversableHandle traversableHandle = {};
 
-    int missCount = 0;
+    int missCount = {};
 
     // Convertit un indice 2D en offset dans l'image
     __device__ __host__ uchar3* at(int x, int y) {
@@ -51,15 +63,11 @@ struct Params
      */
     float pointRadiusModifier = 1.0f;
     
-    /**
-     * Combien de rayons tirer par pixels.
-     * La distribution des rayons peut-être faite de façon régulière ou aléatoire (Monte-Carlo).
-     * Au total, on a donc countRaysPerPixel.x * countRaysPerPixel.y rayons qui sont tirés par pixel.
-     */
-    glm::uvec2 countRaysPerPixel = {1, 1};
-
-
     unsigned long frame = 0;
+
+    SsaaParameters ssaaParams = {};
+
+    curandState* rand = nullptr;
 };
 
 extern "C" __constant__ Params params;

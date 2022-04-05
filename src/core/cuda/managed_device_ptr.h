@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cuda.h>
+#include <cuda_runtime.h>
 #include "core/utility/no_copy.h"
 
 /**
@@ -43,10 +44,11 @@ public:
     /**
      * Construit un nouveau bloc mémoire sur le GPU copiée depuis une zone mémoire du CPU.
      * 
-     * @param[in] data La donnée à allouer et à copier sur le GPU
-     * @param[in] size La taille de donnée à copier sur le GPU
+     * @param[in] data La donnée à allouer et à copier sur le GPU.
+     * @param[in] size La taille de donnée à copier sur le GPU.
+     * @param stream Si != 0, la copie est effectuée de façon asynchrone sur ce stream.
      */
-    managed_device_ptr(const void *data, size_t size);
+    managed_device_ptr(const void *data, size_t size, cudaStream_t stream = 0);
 
     /**
      * Construit un nouveau bloc mémoire en allouant seulement la taille sans copie
@@ -63,15 +65,16 @@ public:
      * Créer un buffer sur le device, le remplit et le retourne.
      *
      * @param cpuData La donnée à copier sur le GPU, la taille est déduite par sizeof(T).
+     * @param stream Si != 0, la copie est effectuée de façon asynchrone sur ce stream.
      *
      * @remarks Factory et pas constructeur pour éviter les ambiguités, les constructeurs
      * prennent toujours une taille en byte et une donnée en void*, mais ici la taille est déduite
      * par le type.
      */
     template<typename T>
-    static managed_device_ptr create_from(const T& cpuData)
+    static managed_device_ptr create_from(const T& cpuData, cudaStream_t stream = 0)
     {
-        return managed_device_ptr(&cpuData, sizeof(T));
+        return managed_device_ptr(&cpuData, sizeof(T), stream);
     }
 
     /**
@@ -112,22 +115,31 @@ public:
     void* to_void_ptr() const;
     
     /**
-     * @brief Copie une donnée CPU sur la mémoire allouée sur le GPU.
-     * 
+     * Copie une donnée CPU sur la mémoire allouée sur le GPU.
      * @param[in] data Le pointeur CPU à copier sur le GPU.
      * @param[in] size Le nombre de bytes de data à copier sur le GPU.
-     *
+     * @param stream Si != 0, la copie est effectuée de façon asynchrone sur ce stream.
      * @remarks N'alloue pas de données, en fait que copier. Il faut donc que la taille
      * de data ne dépasse pas celle allouée dans le constructeur.
      */
-    void fill(const void *data, size_t size);
+    void fill(const void* data, size_t size, cudaStream_t stream = 0);
+
+    /**
+     * Copier size bytes de data vers le GPU,
+     * avec un décalage d'où commencer à écrire.
+     *
+     * @param offset Décalage dans les données GPU pour commencer à copier
+     * @param size Taille de data
+     */
+    void subfill(const void* data, size_t size, size_t offset);
 
 
     /**
      * Récupère les données sur le CPU.
      * @param[out] data Les données écrites. Doit être assez grand pour stocker le buffer.
+     * @param stream Si != 0, la copie est effectuée de façon asynchrone sur ce stream.
      */
-    void download(void *data) const;
+    void download(void *data, cudaStream_t stream = 0) const;
 
     /**
      * @brief Conversion implicite vers un pointeur sur le GPU.

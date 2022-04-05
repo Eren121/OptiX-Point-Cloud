@@ -28,9 +28,18 @@ public:
      * @param d_output Image de sortie Pixel* sur le device imageWidth x imageHeight
      */
     void interpolate(Pixel* d_output);
-    
+
+    /**
+     * Effectue l'interpolation en utilisant plusieurs streams.
+     * Peut améliorer les performances.
+     * @param streams Le tableau de streams
+     * @param count Le nombre de streams
+     */
+    void interpolate(Pixel* d_output, cudaStream_t* streams, int count);
+
     uchar3* getBufferDeviceData() { return m_d_buffer.as<uchar3>(); }
-    
+    managed_device_ptr& getBufferDevice() { return m_d_buffer; }
+
 private:
     /**
      * Contient le buffer vers l'image, sauf que contient plusieurs

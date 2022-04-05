@@ -18,8 +18,11 @@
 #include "OrbitalControls.hpp"
 #include "Scene.hpp"
 #include "Gui.hpp"
-#include "core/utility/debug.h"
 #include "core/SuperSampling.h"
+#include "core/utility/debug.h"
+#include "core/utility/time.h"
+#include "core/cuda/StreamScatter.h"
+#include "ssaa/patterns.h"
 
 std::unique_ptr<PointsCloud> points;
 
@@ -512,11 +515,22 @@ TraversableHandleStorage createAccelerationStructure(OptixDeviceContext context,
     return outputHandle;
 }
 
-#ifndef NOMAIN
-
 int main(int argc, char **argv)
 {
     Gui gui;
+
+    // ===== Création des streams
+
+    const int numStreams = 1;
+    cudaStream_t streams[numStreams];
+
+    for(int i = 0; i < numStreams; i++)
+    {
+        CUDA_CHECK(cudaStreamCreate(&streams[i]));
+    }
+
+
+    // ===== Chargement du nuage de points
 
     const char* path = R"(../../data/bunny/reconstruction/bun_zipper.ply)";
     points = std::make_unique<PointsCloud>(path);
@@ -539,7 +553,14 @@ int main(int argc, char **argv)
     OptixProgramGroup missGroup = groups[2];
     OptixProgramGroup exceptionGroup = groups[3];
 
-    OptixPipeline pipeline = createPipeline(context, groups);
+    // On peut lancer des optixLaunch() en parallèle,
+    // mais il faut que ce soit sur des pipelines différentes
+    // Source: https://forums.developer.nvidia.com/t/optix7-0-could-i-use-two-streams-for-two-optixlaunch-operation-in-two-threads-for-speed-optimize/156764
+    OptixPipeline pipelines[numStreams];
+    for(int s = 0; s < numStreams; s++)
+    {
+        pipelines[s] = createPipeline(context, groups);
+    }
 
     CUstream stream = nullptr;
     CUDA_CHECK(cudaStreamCreate(&stream));
@@ -558,6 +579,7 @@ int main(int argc, char **argv)
 
     TraversableHandleStorage ias = mergeGASIntoIAS(context, stream, traversableHandleStorage.handle, traversableHandleStorage2.handle);
 
+    /*
     OptixStackSizes stack_sizes = {};
     OPTIX_CHECK( optixUtilAccumulateStackSizes(raygenGroup, &stack_sizes ) );
     OPTIX_CHECK( optixUtilAccumulateStackSizes(hitGroup, &stack_sizes ) );
@@ -577,7 +599,8 @@ int main(int argc, char **argv)
                                             direct_callable_stack_size_from_state, continuation_stack_size,
                                             2  // maxTraversableDepth
                                             ) );
-    
+    */
+
     // ====== Création des paramètres à envoyer au GPU pour le ray tracing ======
 
     managed_device_ptr d_pointsCloud(points->data(), sizeof(Point) * points->size());
@@ -716,12 +739,11 @@ int main(int argc, char **argv)
             previousPos = currentPos;
         });
 
-        SuperSampling supersampling(params.width, params.height, 16);
+        SuperSampling supersampling(params.width, params.height, 1);
+
+        managed_device_ptr rngStorage(sizeof(curandState) * params.width * params.height);
 
         app.onDraw = [&]() {
-
-            params.countRaysPerPixel.x = 4;
-            params.countRaysPerPixel.y = 4;
 
             orbitalControls.applyToCamera(params.camera, my::radians(70.0f), static_cast<float>(width) / height);
 
@@ -731,19 +753,52 @@ int main(int argc, char **argv)
             
             if(OPTIMIZE_SUPERSAMPLE)
             {
+                params.rand = rngStorage.as<curandState>();
                 params.image = supersampling.getBufferDeviceData();
-                managed_device_ptr d_params(&params, sizeof(params)); // Copier params sur le GPU
+                params.ssaaParams.numRays = make_int2(1, 1);
+                params.ssaaParams.type = SSAA_RANDOM;
 
-                const unsigned int depth = params.countRaysPerPixel.x * params.countRaysPerPixel.y;
-                OPTIX_CHECK(optixLaunch(
-                    pipeline,
-                    stream,
-                    d_params, d_params.size(),
-                    &sbt,
-                    params.width, params.height, depth
-                ));
+                const unsigned int depth = params.ssaaParams.numRays.x * params.ssaaParams.numRays.y;
 
-                CUDA_CHECK(cudaDeviceSynchronize());
+                {
+                    const StreamScatter scatter(params.width, params.height, numStreams);
+
+                    // Tableau de tous les paramètres des streams
+                    // Allouer / free / copier avant car
+                    // elles sont effectuées de façon synchrone / bloquante
+                    // Et aussi cela permet de n'effectuer qu'une seule allocation, plus rapide
+
+                    managed_device_ptr d_param_array_storage(sizeof(Params) * numStreams);
+                    Params* d_param_array = d_param_array_storage.as<Params>();
+                    
+                    for(int s = 0; s < numStreams; s++)
+                    {
+                        params.offsetIdx = scatter.start(s);
+                        d_param_array_storage.subfill(&params, sizeof(params), sizeof(params) * s);
+                    }
+
+                    for(int s = 0; s < numStreams; s++)
+                    {
+                        cudaStream_t stream = streams[s];
+
+                        const uint2 numThreads = scatter.size(s);
+
+                        // Copier params sur le GPU de façon asynchrone
+                        // Sinon cela empêche la parallélisation des streams
+
+                        OPTIX_CHECK(optixLaunch(
+                            pipelines[s],
+                            stream,
+                            reinterpret_cast<CUdeviceptr>(&d_param_array[s]), sizeof(Params),
+                            &sbt,
+                            numThreads.x, numThreads.y, depth
+                        ));
+                    }
+                }
+
+                // On ne synchronise pas là
+                // Car chaque stream est indépendant:
+                // Un stream interpolera les mêmes pixels que ceux qu'il a ray tracé
 
                 {
                     CUDA_CHECK(cudaGraphicsMapResources(1, &textureResource, stream));
@@ -754,8 +809,13 @@ int main(int argc, char **argv)
                     // Récupère le pointeur de la texture mappé sur CUDA (aussi dans le GPU...)
                     CUDA_CHECK(cudaGraphicsResourceGetMappedPointer(&d_image, &sizeInBytes, textureResource));
                     
-                    supersampling.interpolate(reinterpret_cast<uchar3*>(d_image));
+                    const double start = getTimeInSeconds();
+
+                    supersampling.interpolate(reinterpret_cast<uchar3*>(d_image), streams, numStreams);
+                    CUDA_CHECK(cudaDeviceSynchronize());
                     
+                    performanceInfo.interpolationTimeInSeconds = getTimeInSeconds() - start;
+
                     glBindTexture(GL_TEXTURE_2D, rect->getTexture());
                     glBindBuffer(GL_PIXEL_UNPACK_BUFFER, pbo);
                     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, 0);
@@ -780,7 +840,7 @@ int main(int argc, char **argv)
 
                 const unsigned int depth = 1;
                 OPTIX_CHECK(optixLaunch(
-                    pipeline,
+                    pipelines[0],
                     stream,
                     d_params, d_params.size(),
                     &sbt,
@@ -817,7 +877,10 @@ int main(int argc, char **argv)
 
     // ====== Destruction ======
 
-    OPTIX_CHECK(optixPipelineDestroy(pipeline));
+    for(int s = 0; s < numStreams; s++)
+    {
+        OPTIX_CHECK(optixPipelineDestroy(pipelines[s]));
+    }
 
     for(OptixProgramGroup group : groups) {
         OPTIX_CHECK(optixProgramGroupDestroy(group));
@@ -827,8 +890,11 @@ int main(int argc, char **argv)
     OPTIX_CHECK(optixDeviceContextDestroy(context));
     CUDA_CHECK(cudaStreamDestroy(stream));
 
+    for(int i = 0; i < numStreams; i++)
+    {
+        CUDA_CHECK(cudaStreamDestroy(streams[i]));
+    }
+
     printf("Programme termine avec succes.\n");
     return EXIT_SUCCESS;
 }
-
-#endif

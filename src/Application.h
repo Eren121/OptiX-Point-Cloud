@@ -44,6 +44,12 @@ public:
      * @brief Affiche la fenêtre et bloque jusqu'à ce que la fenêtre se ferme.
      */
     void display();
+    
+    /**
+     * Ferme la fenêtre après la prochaine frame.
+     * Utile avec un outil de profiling comme nsight pour profiler 1 seule frame.
+     */
+    void stopAfterNextFrame() const;
 
 private:
     /**

@@ -72,3 +72,10 @@ struct TraversableHandleStorage {
     // Pour détruire l'AS, il suffira donc de désallouer d_output (fait automatiquement à la destruction du TraversableHandleStorage)
     managed_device_ptr d_storage;
 };
+
+struct PerformanceInfo
+{
+    double interpolationTimeInSeconds;
+};
+
+extern PerformanceInfo performanceInfo;

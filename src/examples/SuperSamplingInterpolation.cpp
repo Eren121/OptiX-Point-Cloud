@@ -44,7 +44,7 @@ int main(int argc, char* argv[])
     stbi_write_png("supersampled_original.png", width, height, 3, original.data(), 0);
 
     std::vector<uchar3> supersampled = generate_image(width, height, subPixelsCount);
-    ss.getDeviceBuffer().fill(supersampled.data(), supersampled.size() * sizeof(uchar3));
+    ss.getBufferDevice().fill(supersampled.data(), supersampled.size() * sizeof(uchar3));
     ss.interpolate(d_interpolated.as<uchar3>());
 
     std::vector<uchar3> interpolated(width * height);

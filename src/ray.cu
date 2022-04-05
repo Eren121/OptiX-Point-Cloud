@@ -8,6 +8,7 @@
 #include <climits>
 #include "Distribution.hpp"
 #include "core/utility/ArrayView.h"
+#include "ssaa/Type.h"
 
 texture<uchar4, 2, cudaReadModeElementType> texRef;
 
@@ -200,14 +201,18 @@ extern "C"
     __global__ void __raygen__my_program()
     {
         const Point* const pointBase = *reinterpret_cast<const Point**>(optixGetSbtDataPointer());
-
-        const uint2 idx = make_uint2(optixGetLaunchIndex());
-        const uint2 dim = make_uint2(optixGetLaunchDimensions());
+        const uint2 screenSize = make_uint2(params.width, params.height);
+        const uint2 idx = make_uint2(optixGetLaunchIndex()) + params.offsetIdx;
+        const uint idxFlattened = idx.x + idx.y * screenSize.x;
         
+        curandState& randState = params.rand[idxFlattened];
+        const unsigned long seed = params.frame;
+        curand_init(seed, idxFlattened, 0, &randState);
+
         // Un kernel est lancé par pixel
         // gridPos définit la position 2D du pixel cible dans la fenêtre du rayon
         // griPos appartient à l'intervalle (-1;1)^2.
-        glm::vec2 gridPos = (Distribution::linspace<glm::vec2>(to_ivec2(idx), to_ivec2(dim)) * 2.0f) - 1.0f;
+        glm::vec2 gridPos = (Distribution::linspace<glm::vec2>(to_ivec2(idx), to_ivec2(screenSize)) * 2.0f) - 1.0f;
 
         // L'origine du rayon est toujours l'origine de la caméra pour une perspective
         const float3 rayOrigin = params.camera.transform.position;
@@ -219,17 +224,18 @@ extern "C"
         const float threadAngleHorizontal = halfFovHorizontal * gridPos.x;
         const float threadAngleVertical = halfFovVertical * gridPos.y;
 
-        // La taille dans le monde d'un pixel sur le plan Near
+        // La taille dans le monde d'un pixel sur le plan Near z=1
         const glm::vec2 pixelSizeOnNearPlane = {
-            (2.0f * tan(halfFovHorizontal)) / static_cast<float>(dim.x),
-            (2.0f * tan(halfFovVertical)) / static_cast<float>(dim.y)
+            (2.0f * tan(halfFovHorizontal)) / static_cast<float>(screenSize.x),
+            (2.0f * tan(halfFovVertical)) / static_cast<float>(screenSize.y)
         };
         
         // Lance le nombre désiré de rayons par pixel,
         // Mixe la couleur en faisant la moyenne
         float3 rayColorAverage;
         
-        const uint numSubPixels = params.countRaysPerPixel.x * params.countRaysPerPixel.y;
+        const int2 numRays = params.ssaaParams.numRays;
+        const uint numRaysTotal = numRays.x * numRays.y;
         const uint subPixelIdx = optixGetLaunchIndex().z;
 
         {
@@ -237,19 +243,19 @@ extern "C"
             glm::uvec2 pixelRayIndex;
 
             #if !OPTIMIZE_SUPERSAMPLE
-            for(pixelRayIndex.x = 0; pixelRayIndex.x < params.countRaysPerPixel.x; ++pixelRayIndex.x)
+            for(pixelRayIndex.x = 0; pixelRayIndex.x < numRays.x; ++pixelRayIndex.x)
             #endif
             {
                 #if !OPTIMIZE_SUPERSAMPLE
-                for(pixelRayIndex.y = 0; pixelRayIndex.y < params.countRaysPerPixel.y; ++pixelRayIndex.y)
+                for(pixelRayIndex.y = 0; pixelRayIndex.y < numRays.y; ++pixelRayIndex.y)
                 #endif
                 {
                     #if OPTIMIZE_SUPERSAMPLE
-                    pixelRayIndex.x = subPixelIdx % params.countRaysPerPixel.x;
-                    pixelRayIndex.y = subPixelIdx / params.countRaysPerPixel.x;
+                    pixelRayIndex.x = subPixelIdx % numRays.x;
+                    pixelRayIndex.y = subPixelIdx / numRays.x;
                     #endif
 
-                    // Soit le plan Near centré en 0
+                    // Soit le plan Near centré en 0 à z=1
                     // pixelTarget donne les coordonnées du pixel cible sur ce plan Near
                     glm::vec2 pixelTarget = {
                         tan(threadAngleHorizontal),
@@ -257,9 +263,17 @@ extern "C"
                     };
 
                     // Décalage propre à chaque sous-rayon pour un pixel donné
+                    
+                    SsaaContext ssaaContext;
+                    ssaaContext.numRays = params.ssaaParams.numRays;
+                    ssaaContext.id = make_int2(pixelRayIndex.x, pixelRayIndex.y);
+                    ssaaContext.rand = &randState;
+                    ssaaApply(params.ssaaParams.type, ssaaContext);
+                    const glm::vec2 subPixelOffset = {ssaaContext.out_pos.x, ssaaContext.out_pos.y};
+
                     const glm::vec2 pixelRayOffset =
                         pixelSizeOnNearPlane
-                        * unNormalize(Distribution::linspace<glm::vec2>(pixelRayIndex, params.countRaysPerPixel), glm::vec2(-0.5f), glm::vec2(0.5f));
+                        * unNormalize(subPixelOffset, glm::vec2(-0.5f), glm::vec2(0.5f));
                     
                     pixelTarget += pixelRayOffset;
 
@@ -283,7 +297,7 @@ extern "C"
         
 
         #if OPTIMIZE_SUPERSAMPLE
-            ArrayView<uchar3, 3> view(params.image, params.height, params.width, numSubPixels);
+            ArrayView<uchar3, 3> view(params.image, params.height, params.width, numRaysTotal);
             view(idx.y, idx.x, subPixelIdx) = convertFloatToCharColor(rayColorAverage);
         #else
             ArrayView<uchar3, 2> view(params.image, params.height, params.width);
