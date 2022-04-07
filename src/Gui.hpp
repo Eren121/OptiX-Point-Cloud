@@ -3,8 +3,23 @@
 
 #include "OrbitalControls.hpp"
 #include "ray.cuh"
-
 #include "imgui.h"
+#include "ssaa/GuiPreview.h"
+#include "ssaa/SuperSampling.h"
+#include "core/cuda/Pbo.h"
+#include "SimpleGLRect.hpp"
+
+struct GuiArgs
+{
+    // évite de changer les signatures des fonctions et avoir trop d'arguments
+    // à chaque fois que l'on veut en rajouter un
+
+    Params* params;
+    OrbitalControls* orbitalControls;
+    SuperSampling* ssaa;
+    SimpleGLRect* rect;
+    Pbo* pbo; // ID du PBO OpenGL
+};
 
 /**
  * Stocke toutes les données utiles pour le GUI.
@@ -24,7 +39,7 @@ public:
     bool showInterface = true;
 
     /**
-     * Le FOV vertical.
+     * Le FOV vertical (en degres).
      * Le FOV horizontal ne peut pas être modifié car il est calculé en fonction du FOV vertical et de la taille de la fenêtre.
      */
     float verticalFieldOfView = 70.0f;
@@ -32,7 +47,10 @@ public:
     /** 
      * @param params Les paramètres à envoyer au programme OptiX.
      */
-    void draw(Params& params, OrbitalControls& orbitalControls);
+    void draw(GuiArgs& args);
+
+private:
+    SsaaGuiPreview m_ssaaPreview;
 };
 
 #endif /* GUI_HPP */

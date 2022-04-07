@@ -10,6 +10,17 @@
 
 #define OPTIMIZE_SUPERSAMPLE 1
 
+// Différence entre la taille de la fenêtre sur le bureau
+// Et la taille interne de la fenêtre:
+// Pour rendre les calculs plus rapides, on stocke moins de pixels
+// et ils sont affichés interpolés
+// evidemment, le rendu sera moins bien et pixellisé
+// On alloue initialemment un buffer de la taille max. possible pour ne pas réallouer à chaque fois
+// Cette façon de faire sera effectuée plusieurs fois
+// On considère du full HD 1920x1080, peut être changé à + pour du 4K
+const int maxWinTexWidth = 1920;
+const int maxWinTexHeight = 1080;
+        
 // La structure est read-only sur le GPU!!
 // Mais elle peut contenir un pointeur vers une zone où l'on peut écrire
 struct Params

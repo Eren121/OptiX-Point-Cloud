@@ -6,7 +6,12 @@
 enum SsaaType {
     SSAA_REGULAR,
     SSAA_RANDOM,
+
+    SSAA_Count
 };
+
+extern const char* const ssaaNames[SSAA_Count];
+
 
 inline __device__ __host__ void ssaaApply(SsaaType type, SsaaContext& context)
 {

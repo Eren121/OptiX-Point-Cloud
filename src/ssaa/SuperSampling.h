@@ -24,6 +24,26 @@ public:
     SuperSampling(int imageWidth, int imageHeight, int subPixelsCount);
 
     /**
+     * Modifie le nombre de rayons par pixel.
+     *
+     * Cela n'alloue aucune donnée GPU.
+     * Si le stockage actuel n'est pas assez grand, cela lance une erreur.
+     *
+     * Si le stockage actuel est trop grand, alors cela ne fait qu'utiliser une partie
+     * du stockage, et la fin du stockage ne sera pas utilisée.
+     *
+     * Dans les faits, seulement la taille des ArrayView seront modifiées.
+     */
+    void setNumRays(int numRays);
+
+    /**
+     * Modifie la taille des données.
+     * Cette taille doit être inférieure à la capacité du buffer interne
+     * (arguments du constructeur).
+     */
+    void setSize(int width, int height);
+
+    /**
      * Effectue l'interpolation linéaire du buffer temporaire et stocke l'interpolation dans une image.
      * @param d_output Image de sortie Pixel* sur le device imageWidth x imageHeight
      */

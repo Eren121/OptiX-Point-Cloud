@@ -2,6 +2,8 @@
 #include "core/cuda/math.h"
 #include "core/cuda/check.h"
 #include "core/utility/ArrayView.h"
+#include <cstdio>
+#include <cstdlib>
 
 /**
  * @param outputBuf L'image de sortie, interpolée de taille width x height
@@ -69,7 +71,48 @@ void SuperSampling::interpolate(Pixel* d_output)
     kernelSuperSamplingInterpolation<<<numBlocks, threadsPerBlock>>>(
         d_output, m_d_buffer.as<Pixel>(),
         w, h, sub);
-    //CUDA_CHECK_LAST_KERNEL();
+    CUDA_CHECK_LAST_KERNEL();
+}
+
+void SuperSampling::setSize(int width, int height)
+{
+    // Vérifie que le stockage interne est assez grand
+    const size_t targetSize =
+        static_cast<size_t>(width) *
+        static_cast<size_t>(height) *
+        m_subPixelsCount * sizeof(Pixel);
+    
+    if(targetSize > m_d_buffer.size())
+    {
+        const char* fmt = "SuperSampling: impossible d'utiliser une taille (%d, %d) (capacity: %zu bytes)\n";
+        std::fprintf(stderr, fmt, width, height, m_d_buffer.size());
+        std::exit(1);
+    }
+    else
+    {
+        m_width = width;
+        m_height = height;
+    }
+}
+
+void SuperSampling::setNumRays(int numRays)
+{
+    // Vérifie que le stockage interne est assez grand
+    const size_t targetSize =
+        static_cast<size_t>(m_width) *
+        static_cast<size_t>(m_height) *
+        numRays * sizeof(Pixel);
+    
+    if(targetSize > m_d_buffer.size())
+    {
+        const char* fmt = "SuperSampling: impossible d'utiliser %d rays par pixel (capacity: %zu bytes)\n";
+        std::fprintf(stderr, fmt, numRays, m_d_buffer.size());
+        std::exit(1);
+    }
+    else
+    {
+        m_subPixelsCount = numRays;
+    }
 }
 
 void SuperSampling::interpolate(Pixel* d_outputBuf, cudaStream_t* streams, int count)
@@ -77,7 +120,7 @@ void SuperSampling::interpolate(Pixel* d_outputBuf, cudaStream_t* streams, int c
     const uint w = static_cast<uint>(m_width);
     const uint h = static_cast<uint>(m_height);
     const uint sub = static_cast<uint>(m_subPixelsCount);
-
+    
     // C'est parallélisable en streams car on effectue chaque somme de sous-pixels
     // Qui est entièrement indépendant pour chaque pixel
     // Même pas besoin de copie de données, toutes les données sont déjà sur le GPU

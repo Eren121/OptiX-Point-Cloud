@@ -21,6 +21,8 @@
 #include "core/utility/debug.h"
 #include "core/utility/time.h"
 #include "core/cuda/StreamScatter.h"
+#include "core/cuda/Pbo.h"
+#include "core/gl/check.h"
 #include "ssaa/SuperSampling.h"
 #include "ssaa/patterns.h"
 
@@ -304,27 +306,6 @@ OptixDeviceContext createContext()
     return context;
 }
 
-void printResult(const Params &params)
-{
-    printf("hello?\n");
-
-    std::vector<uchar4> image(params.width * params.height);
-
-    CUDA_CHECK(cudaMemcpy(image.data(),
-        params.image, image.size() * sizeof(image[0]),
-        cudaMemcpyDeviceToHost)
-    );
-
-    uchar4 px = image[0];
-    uint4 u = make_uint4(px.x, px.y, px.z, px.w);
-    printf("%d, %d, %d, %d\n", u.x, u.y, u.z, u.w);
-
-
-    const int strideInBytes = params.width * sizeof(params.image[0]);
-    stbi_write_png("output.png", params.width, params.height, 4, image.data(), 0);
-    system("output.png");
-}
-
 // Créer la structure accélératrice OptiX
 // Cette partie est la plus importante, elle permet d'importer les géométries dans OptiX.
 // C'est la seule partie qui dépend vraiment de l'application, le reste des fonctions (createPipeline(), createContext()...)
@@ -515,6 +496,30 @@ TraversableHandleStorage createAccelerationStructure(OptixDeviceContext context,
     return outputHandle;
 }
 
+bool isShiftDown(GLFWwindow* win)
+{
+    return glfwGetKey(win, GLFW_KEY_LEFT_SHIFT) || glfwGetKey(win, GLFW_KEY_RIGHT_SHIFT);
+}
+
+bool isCtrlDown(GLFWwindow* win)
+{
+    return glfwGetKey(win, GLFW_KEY_LEFT_CONTROL) || glfwGetKey(win, GLFW_KEY_RIGHT_CONTROL);
+}
+
+float userScalable(GLFWwindow* win, float f)
+{
+    if(isShiftDown(win))
+    {
+        f *= 10.0f;
+    }
+    if(isCtrlDown(win))
+    {
+        f /= 10.0f;
+    }
+
+    return f;
+}
+
 int main(int argc, char **argv)
 {
     Gui gui;
@@ -528,7 +533,6 @@ int main(int argc, char **argv)
     {
         CUDA_CHECK(cudaStreamCreate(&streams[i]));
     }
-
 
     // ===== Chargement du nuage de points
 
@@ -646,31 +650,29 @@ int main(int argc, char **argv)
 
     
     {
-        const int resolutionFactor = 4;
-        const int width = 1920 / resolutionFactor;
-        const int height = 1080 / resolutionFactor;
-        Application app(width, height);
+        // Initialement, on créé la fenêtre à ratio 1:1
+        Application app(maxWinTexWidth, maxWinTexHeight);
+
+        // static pour permettre d'être utilisé dans les callbacks GLFW pour les inputs
+        static Params params = {};
+
+        params.camera.origin.z = 300;
+
+        {
+            const float ratio = 10.0f;
+            params.width = maxWinTexWidth / ratio;
+            params.height = maxWinTexHeight / ratio;
+        }
 
         // Contient la texture qui sera affiché sur toute la fenêtre à chaque Frame, et le VAO et le VBO associés à la texture.        
-        static std::unique_ptr<SimpleGLRect> rect = std::make_unique<SimpleGLRect>(width, height);
-
-
-        static GLuint pbo;
-        glGenBuffers(1, &pbo);
-        glBindBuffer(GL_PIXEL_UNPACK_BUFFER, pbo);
-        glBufferData(GL_PIXEL_UNPACK_BUFFER, width * height * 3, NULL, GL_STREAM_DRAW);
-        glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
-
-        // Contient les pixels de la fenêtre (= framebuffer) sous forme d'un pointeur vers le GPU.
-        cudaGraphicsResource* textureResource = nullptr;
-
-        // Indique à OpenGL que la texture sera utilisée à la fois par CUDA et OpenGL
-        // On veut écrire l'image avec CUDA et l'afficher avec OpenGL d'où CU_GRAPHICS_REGISTER_FLAGS_WRITE_DISCARD.
-        // Aide: https://forums.developer.nvidia.com/t/reading-opengl-texture-data-from-cuda/110370/3
-        CUDA_CHECK(cudaGraphicsGLRegisterBuffer(
-            &textureResource, pbo,
-            cudaGraphicsRegisterFlagsWriteDiscard));
-
+        static std::unique_ptr<SimpleGLRect> rect
+            = std::make_unique<SimpleGLRect>(maxWinTexWidth, maxWinTexHeight);
+        rect->setRenderSize(params.width, params.height);
+                    
+        // Une exception est le PBO: on ré-alloue la taille à chaque fois que celle-ci change
+        // Obligé avec OpenGL, mais cela devrait être relativement rapide
+        // Heureusement, la taille du PBO ne dépend pas du nombre de pixels
+        Pbo pbo(params.width, params.height);
 
             
         static OrbitalControls orbitalControls(make_float3(0.0f, 0.0f, 0.0f), 100.0f);
@@ -704,20 +706,15 @@ int main(int argc, char **argv)
         orbitalControls.horizontalAngle = my::pi / 4.0f;
         orbitalControls.verticalAngle = my::pi / 4.0f;
 
-        // static pour permettre d'être utilisé dans les callbacks GLFW pour les inputs
-        static Params params = {};
-
-        params.camera.origin.z = 300;
-        params.width = width;
-        params.height = height;
         params.traversableHandle = traversableHandleStorage.handle;
 
-        glfwSetScrollCallback(app.getWindow(), [](GLFWwindow*, double xoffset, double yoffset) {
+        glfwSetScrollCallback(app.getWindow(), [](GLFWwindow* window, double xoffset, double yoffset) {
 
             // Ne pas scroller si on focus une fenêtre ImGUI
             if(!ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow))
             {
-                const float zoomSpeed = 0.1f;
+                float zoomSpeed = userScalable(window, 0.05f);
+
                 orbitalControls.cameraDistanceToTarget *= (1.0f - yoffset * zoomSpeed);
             }
         });
@@ -730,7 +727,7 @@ int main(int argc, char **argv)
             // Déplacer uniquement si le bouton gauche est cliqué
             if( glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS)
             {
-                const float speed = 0.02f;
+                const float speed = userScalable(window, 0.02f);
 
                 const float2 deltaPos = currentPos - previousPos;
 
@@ -743,13 +740,31 @@ int main(int argc, char **argv)
             previousPos = currentPos;
         });
 
-        SuperSampling supersampling(params.width, params.height, 1);
+        // On créé directement la texture la plus grande possible
+        // Cela permet de ne pas réallouer la structure quand numRays change
+        SuperSampling ssaa(maxWinTexWidth, maxWinTexHeight, SSAA_NUM_RAYS_MAX);
+        ssaa.setNumRays(params.ssaaParams.numRays());
+        ssaa.setSize(params.width, params.height);
+        
+        // Créer le tableau de curandState le + grand possible aussi
+        managed_device_ptr rngStorage(sizeof(curandState) * maxWinTexWidth * maxWinTexHeight);
 
-        managed_device_ptr rngStorage(sizeof(curandState) * params.width * params.height);
+        params.rand = rngStorage.as<curandState>();
 
         app.onDraw = [&]() {
 
-            orbitalControls.applyToCamera(params.camera, my::radians(70.0f), static_cast<float>(width) / height);
+            orbitalControls.applyToCamera(params.camera, my::radians(gui.verticalFieldOfView), static_cast<float>(params.width) / params.height);
+
+            {
+                GuiArgs args;
+                args.params = &params;
+                args.orbitalControls = &orbitalControls;
+                args.ssaa = &ssaa;
+                args.rect = rect.get();
+                args.pbo = &pbo;
+                
+                gui.draw(args);
+            }
 
             // Map la texture OpenGL dans un tableau CUDA,
             // Puis effectue l'interpolation sur ce tableau
@@ -757,12 +772,7 @@ int main(int argc, char **argv)
             
             if(OPTIMIZE_SUPERSAMPLE)
             {
-                params.rand = rngStorage.as<curandState>();
-                params.image = supersampling.getBufferDeviceData();
-                params.ssaaParams.numRays = make_int2(1, 1);
-                params.ssaaParams.type = SSAA_RANDOM;
-
-                const unsigned int depth = params.ssaaParams.numRays.x * params.ssaaParams.numRays.y;
+                params.image = ssaa.getBufferDeviceData();
 
                 {
                     const StreamScatter scatter(params.width, params.height, numStreams);
@@ -795,7 +805,7 @@ int main(int argc, char **argv)
                             stream,
                             reinterpret_cast<CUdeviceptr>(&d_param_array[s]), sizeof(Params),
                             &sbt,
-                            numThreads.x, numThreads.y, depth
+                            numThreads.x, numThreads.y, params.ssaaParams.numRays()
                         ));
                     }
                 }
@@ -805,40 +815,34 @@ int main(int argc, char **argv)
                 // Un stream interpolera les mêmes pixels que ceux qu'il a ray tracé
 
                 {
-                    CUDA_CHECK(cudaGraphicsMapResources(1, &textureResource, stream));
-
-                    void* d_image = nullptr;
-                    size_t sizeInBytes;
-                    
-                    // Récupère le pointeur de la texture mappé sur CUDA (aussi dans le GPU...)
-                    CUDA_CHECK(cudaGraphicsResourceGetMappedPointer(&d_image, &sizeInBytes, textureResource));
+                    void* d_image = pbo.map(stream);
                     
                     const double start = getTimeInSeconds();
 
-                    supersampling.interpolate(reinterpret_cast<uchar3*>(d_image), streams, numStreams);
+                    ssaa.interpolate(reinterpret_cast<uchar3*>(d_image), streams, numStreams);
                     CUDA_CHECK(cudaDeviceSynchronize());
                     
                     performanceInfo.interpolationTimeInSeconds = getTimeInSeconds() - start;
+                    
+                    // On travaille en RGB (3 bytes), or par défaut OpenGL fonctionne avec 4 bytes
+                    // Demande à travailler sur des muliples de 1 (donc n'importe quel nombre dont 3)
+                    GL_CHECK(glPixelStorei(GL_UNPACK_ALIGNMENT, 1));
 
-                    glBindTexture(GL_TEXTURE_2D, rect->getTexture());
-                    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, pbo);
-                    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, 0);
-                    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+                    GL_CHECK(glBindBuffer(GL_PIXEL_UNPACK_BUFFER, pbo.id()));
+                    GL_CHECK(glBindTexture(GL_TEXTURE_2D, rect->getTexture()));
+                    
+                    // Actualise la sous-partie de la texture qui est active
+                    // Contrairement à glTexImage2D(), glTexSubImage2D() ne redimensionne pas la texture 
+                    GL_CHECK(glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, params.width, params.height, GL_RGB, GL_UNSIGNED_BYTE, 0));
+                    GL_CHECK(glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0));
 
-                    // Détruit la ressource d'interoperabilité CUDA, à chaque frame
-                    CUDA_CHECK(cudaGraphicsUnmapResources(1, &textureResource, stream));
+                    pbo.unmap(stream);
                 }
             }
             else
             {
-                CUDA_CHECK(cudaGraphicsMapResources(1, &textureResource, stream));
-
-                void* d_image = nullptr;
-                size_t sizeInBytes;
-                
-                // Récupère le pointeur de la texture mappé sur CUDA (aussi dans le GPU...)
-                CUDA_CHECK(cudaGraphicsResourceGetMappedPointer(&d_image, &sizeInBytes, textureResource));
-                
+                void* d_image = pbo.map(stream);
+                    
                 params.image = reinterpret_cast<uchar3*>(d_image);
                 managed_device_ptr d_params(&params, sizeof(params)); // Copier params sur le GPU
 
@@ -852,12 +856,11 @@ int main(int argc, char **argv)
                 ));
 
                 glBindTexture(GL_TEXTURE_2D, rect->getTexture());
-                glBindBuffer(GL_PIXEL_UNPACK_BUFFER, pbo);
-                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, 0);
+                glBindBuffer(GL_PIXEL_UNPACK_BUFFER, pbo.id());
+                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, params.width, params.height, 0, GL_RGB, GL_UNSIGNED_BYTE, 0);
                 glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
 
-                // Détruit la ressource d'interoperabilité CUDA, à chaque frame
-                CUDA_CHECK(cudaGraphicsUnmapResources(1, &textureResource, stream));
+                pbo.unmap(stream);
             }
             
             // Utile ?
@@ -865,17 +868,10 @@ int main(int argc, char **argv)
 
             rect->draw();
             
-            gui.draw(params, orbitalControls);
-            
             params.frame++;
         };
 
         app.display();
-
-        CUDA_CHECK(cudaGraphicsUnregisterResource(textureResource));
-        textureResource = nullptr;
-
-        glDeleteBuffers (1, &pbo);
     }
     
 

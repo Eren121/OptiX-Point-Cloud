@@ -60,7 +60,9 @@ extern "C"
         const float tmin = 0.0f, tmax = 1e16f;
 
         const float rayTime = 0.0f; // Non-utilisé
-        const unsigned int rayFlags = OPTIX_RAY_FLAG_TERMINATE_ON_FIRST_HIT;
+        const unsigned int rayFlags = OPTIX_RAY_FLAG_TERMINATE_ON_FIRST_HIT
+            | OPTIX_RAY_FLAG_CULL_BACK_FACING_TRIANGLES
+            | OPTIX_RAY_FLAG_DISABLE_ANYHIT;
 
 
         // Masque de visibilité
@@ -118,7 +120,7 @@ extern "C"
 
                 const Point& pointCollided = pointBase[payload.primitiveID];
                 const float3& collisionPos = payload.intersection;
-                const float3& pointColor = as_float3(pointCollided.col) / 255.0f;
+                const float3& pointColor = convertCharToFloatColor(pointCollided.col);
                 const float3 collisionPosNormal = normalize(payload.intersection - pointCollided.pos);
 
                 // Actualise la couleur
@@ -212,8 +214,10 @@ extern "C"
         // Un kernel est lancé par pixel
         // gridPos définit la position 2D du pixel cible dans la fenêtre du rayon
         // griPos appartient à l'intervalle (-1;1)^2.
-        glm::vec2 gridPos = (Distribution::linspace<glm::vec2>(to_ivec2(idx), to_ivec2(screenSize)) * 2.0f) - 1.0f;
-
+        const float2 gridPos = unNormalize(
+            (0.5f + make_float2(idx)) / make_float2(screenSize),
+            make_float2(-1.0f), make_float2(1.0f));
+        
         // L'origine du rayon est toujours l'origine de la caméra pour une perspective
         const float3 rayOrigin = params.camera.transform.position;
         
@@ -225,7 +229,7 @@ extern "C"
         const float threadAngleVertical = halfFovVertical * gridPos.y;
 
         // La taille dans le monde d'un pixel sur le plan Near z=1
-        const glm::vec2 pixelSizeOnNearPlane = {
+        const float2 pixelSizeOnNearPlane = {
             (2.0f * tan(halfFovHorizontal)) / static_cast<float>(screenSize.x),
             (2.0f * tan(halfFovVertical)) / static_cast<float>(screenSize.y)
         };
@@ -234,71 +238,60 @@ extern "C"
         // Mixe la couleur en faisant la moyenne
         float3 rayColorAverage;
         
-        const int2 numRays = params.ssaaParams.numRays;
-        const uint numRaysTotal = numRays.x * numRays.y;
-        const uint subPixelIdx = optixGetLaunchIndex().z;
-
         {
-            float3 raysColorsSum = make_float3(0.0f);    
-            glm::uvec2 pixelRayIndex;
+            float3 raysColorsSum = make_float3(0.0f);
 
-            #if !OPTIMIZE_SUPERSAMPLE
-            for(pixelRayIndex.x = 0; pixelRayIndex.x < numRays.x; ++pixelRayIndex.x)
+            #if OPTIMIZE_SUPERSAMPLE
+                const int r = optixGetLaunchIndex().z;
+            #else
+                for(int r = 0; r < params.ssaaParams.numRays(); r++)
             #endif
             {
-                #if !OPTIMIZE_SUPERSAMPLE
-                for(pixelRayIndex.y = 0; pixelRayIndex.y < numRays.y; ++pixelRayIndex.y)
-                #endif
-                {
-                    #if OPTIMIZE_SUPERSAMPLE
-                    pixelRayIndex.x = subPixelIdx % numRays.x;
-                    pixelRayIndex.y = subPixelIdx / numRays.x;
-                    #endif
+                // Soit le plan Near centré en 0 à z=1
+                // pixelTarget donne les coordonnées du pixel cible sur ce plan Near
+                float2 pixelTarget = {
+                    tan(threadAngleHorizontal),
+                    tan(threadAngleVertical)
+                };
 
-                    // Soit le plan Near centré en 0 à z=1
-                    // pixelTarget donne les coordonnées du pixel cible sur ce plan Near
-                    glm::vec2 pixelTarget = {
-                        tan(threadAngleHorizontal),
-                        tan(threadAngleVertical)
-                    };
+                // Décalage propre à chaque sous-rayon pour un pixel donné
+                
+                SsaaContext ssaaContext;
+                ssaaContext.numRays = params.ssaaParams.numRays();
+                ssaaContext.numRaysSqrt = params.ssaaParams.numRaysSqrt();
+                ssaaContext.id = r;
+                ssaaContext.options = &params.ssaaParams.options;
+                ssaaContext.rand = &randState;
+                ssaaApply(params.ssaaParams.type, ssaaContext);
+                const float2 subPixelOffset = {ssaaContext.out_pos.x, ssaaContext.out_pos.y};
 
-                    // Décalage propre à chaque sous-rayon pour un pixel donné
-                    
-                    SsaaContext ssaaContext;
-                    ssaaContext.numRays = params.ssaaParams.numRays;
-                    ssaaContext.id = make_int2(pixelRayIndex.x, pixelRayIndex.y);
-                    ssaaContext.rand = &randState;
-                    ssaaApply(params.ssaaParams.type, ssaaContext);
-                    const glm::vec2 subPixelOffset = {ssaaContext.out_pos.x, ssaaContext.out_pos.y};
+                const float2 pixelRayOffset =
+                    pixelSizeOnNearPlane
+                    * unNormalize(subPixelOffset, make_float2(-0.5f), make_float2(0.5f));
+                
+                pixelTarget += pixelRayOffset;
 
-                    const glm::vec2 pixelRayOffset =
-                        pixelSizeOnNearPlane
-                        * unNormalize(subPixelOffset, glm::vec2(-0.5f), glm::vec2(0.5f));
-                    
-                    pixelTarget += pixelRayOffset;
+                // On considère un plan Near à z = 1.0f pour calculer les coordonnées des rayons
+                const float3 rayDirection = normalize(cameraLook
+                    + pixelTarget.x * params.camera.getRight()
+                    + pixelTarget.y * params.camera.getUp()
+                );
 
-                    // On considère un plan Near à z = 1.0f pour calculer les coordonnées des rayons
-                    const float3 rayDirection = normalize(cameraLook
-                        + pixelTarget.x * params.camera.getRight()
-                        + pixelTarget.y * params.camera.getUp()
-                    );
-
-                    raysColorsSum += traceRayAndGetColor(rayOrigin, rayDirection);
-                }
+                raysColorsSum += traceRayAndGetColor(rayOrigin, rayDirection);
             }
 
             #if OPTIMIZE_SUPERSAMPLE
                 // 1 seul pixel, donc avg = sum
                 rayColorAverage = raysColorsSum;
             #else
-                rayColorAverage = raysColorsSum / (static_cast<float>(numSubPixels));
+                rayColorAverage = raysColorsSum / static_cast<float>(params.ssaaParams.numRays());
             #endif
         }
         
 
         #if OPTIMIZE_SUPERSAMPLE
-            ArrayView<uchar3, 3> view(params.image, params.height, params.width, numRaysTotal);
-            view(idx.y, idx.x, subPixelIdx) = convertFloatToCharColor(rayColorAverage);
+            ArrayView<uchar3, 3> view(params.image, params.height, params.width, params.ssaaParams.numRays());
+            view(idx.y, idx.x, optixGetLaunchIndex().z) = convertFloatToCharColor(rayColorAverage);
         #else
             ArrayView<uchar3, 2> view(params.image, params.height, params.width);
             view(idx.y, idx.x) = convertFloatToCharColor(rayColorAverage);

@@ -46,10 +46,15 @@ project(TestOptiX LANGUAGES CXX CUDA)
         core/cuda/check.cpp
         core/cuda/managed_device_ptr.cpp
         core/cuda/StreamScatter.cpp
+        core/cuda/Pbo.cpp
         core/optix/stubs.cpp
         core/optix/check.cpp
         core/utility/time.cpp
-        ssaa/SuperSampling.cu)
+        ssaa/SuperSampling.cu
+        ssaa/GuiPreview.cpp
+        ssaa/Parameters.cpp
+        ssaa/Type.cpp
+        ssaa/Options.cpp)
 
     list(TRANSFORM COMMON_SRC PREPEND ${SRC_DIR})
     add_library(commonLib ${COMMON_SRC})
@@ -92,7 +97,7 @@ project(TestOptiX LANGUAGES CXX CUDA)
     set_target_properties(shadersLib PROPERTIES CUDA_PTX_COMPILATION ON)
 
 # Compilation des exemples
-# Chaque fichier dans example/*.cpp possède un main, qui contient un test / exemple
+# Chaque fichier dans example/*.cpp possède un main, qui contient un exemple (ou test unitaire)
 
     enable_testing()
 
@@ -122,3 +127,10 @@ project(TestOptiX LANGUAGES CXX CUDA)
         TARGET ${EXE} POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E
             copy_if_different $<TARGET_OBJECTS:shadersLib> $<TARGET_FILE_DIR:${EXE}>)
+
+# Git watcher (récupérer les info. de git dans le code)
+
+    set(PRE_CONFIGURE_FILE "thirdparty/gitwatcher/git.h.in")
+    set(POST_CONFIGURE_FILE "${SRC_DIR}/git.h")
+    include(thirdparty/gitwatcher/git_watcher.cmake)
+    add_dependencies(commonLib check_git)

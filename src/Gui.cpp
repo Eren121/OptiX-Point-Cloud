@@ -1,11 +1,36 @@
 #include "Gui.hpp"
+#include "SimpleGLRect.hpp"
+#include "ray.cuh"
 #include "imgui.h"
 #include "helper_math.h"
 #include "Distribution.hpp"
 #include "core/utility/time.h"
+#include <algorithm>
+#include <sstream>
+#include <string>
+#include "git.h"
 
-void Gui::draw(Params& params, OrbitalControls& orbitalControls)
+void Gui::draw(GuiArgs& args)
 {
+    Params& params = *args.params;
+    OrbitalControls& orbitalControls = *args.orbitalControls;
+    SuperSampling& ssaa = *args.ssaa;
+    SimpleGLRect& rect = *args.rect;
+    Pbo& pbo = *args.pbo;
+
+
+    ///////////// Custom style
+    {
+        static bool first = true;
+        if(first)
+        {
+            first = false;
+            ImGuiStyle& style = ImGui::GetStyle();
+            style.FrameRounding = 24.0f;
+        }
+    }
+    /////////////
+
     const ImGuiTreeNodeFlags nodeFlags = ImGuiTreeNodeFlags_DefaultOpen;
     
     static double previousTime = getTimeInSeconds();
@@ -49,17 +74,15 @@ void Gui::draw(Params& params, OrbitalControls& orbitalControls)
             ImGui::SliderFloat("Angle vertical", &orbitalControls.verticalAngle, -pitchLimit, pitchLimit);
             ImGui::SliderFloat("distance", &orbitalControls.cameraDistanceToTarget, 0.0001f, 1.0f);
             
+            ImGui::BeginDisabled();
             float3 rel = orbitalControls.getCameraRelativePosition();
             ImGui::InputFloat3("position", &rel.x);
-
-            float realDist = length(rel);
-            ImGui::InputFloat("real distance", &realDist);
-
-            float2 fov = make_float2(
-                my::degrees(params.camera.verticalFieldOfView),
-                my::degrees(params.camera.horizontalFieldOfView)
-            );
-            ImGui::InputFloat2("FOV", &fov.x);
+            ImGui::EndDisabled();
+            
+            // >= 180.0f: peut entrainer des lags
+            // pt. entraîne trop de NaN dans les fonctions trigo?
+            ImGui::SliderFloat("FOVY", &verticalFieldOfView, 1.0f, 179.0f);
+            ImGui::TextDisabled("FOVX = %.2f\n", my::degrees(params.camera.horizontalFieldOfView));
 
             
             static float3 worldUp = make_float3(0.0f, 1.0f, 0.0f);
@@ -70,55 +93,78 @@ void Gui::draw(Params& params, OrbitalControls& orbitalControls)
         }
         if(ImGui::CollapsingHeader("Ray casting"))
         {
-            int2 numRays = params.ssaaParams.numRays;
-            ImGui::SliderInt2("Rayons par pixel", &numRays.x, 1, 10);
-            
-            /*
-            // Inspiré en grande partie de la partie "Canvas" de la démo ImGui.
-            // Note: pour ImGUI, le curseur signifie la position actuel de rendu (et pas la souris de l'utilisateur)
+            ImGui::Checkbox("show preview window", &m_ssaaPreview.isOpen);
+            ImGui::Separator();
 
-            ImVec2 canvas_p0 = ImGui::GetCursorScreenPos();
-            ImVec2 canvas_sz = ImGui::GetContentRegionAvail();
-            ImVec2 canvas_p1 = ImVec2(canvas_p0.x + canvas_sz.x, canvas_p0.y + canvas_sz.y);
-s   
-            // Draw border and background color
-            ImGuiIO& io = ImGui::GetIO();
-            ImDrawList* draw_list = ImGui::GetWindowDrawList();
-            draw_list->AddRectFilled(canvas_p0, canvas_p1, IM_COL32(50, 50, 50, 255));
-            draw_list->AddRect(canvas_p0, canvas_p1, IM_COL32(255, 255, 255, 255));
-
-            if(canvas_sz.x != 0 && canvas_sz.y != 0) // Evite un crash si la taille est zéro
+            if(drawGui(params.ssaaParams))
             {
-                // Permet de donner une taille réelle à notre canvas et d'avancer le curseur ImGui 
-                ImGui::InvisibleButton("canvas", canvas_sz, ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
-                
+                ssaa.setNumRays(params.ssaaParams.numRays());
+            }
+        }
+        if(ImGui::CollapsingHeader("Performance"))
+        {
+            {
+                // Normalement maxHeight / height a le même ratio,
+                // ici on calcule sur width arbitrairement
 
-                for(int x = 0; x < countRaysPerPixel.x; ++x)
-                {
-                    for(int y = 0; y < countRaysPerPixel.y; ++y)
-                    {
-                        const glm::vec2 pos = Distribution::linspace<glm::vec2>(glm::ivec2(x, y), countRaysPerPixel);
-                        ImVec2 center;
-                        center.x = canvas_p0.x + pos.x * canvas_sz.x;
-                        center.y = canvas_p0.y + pos.y * canvas_sz.y;
-                        draw_list->AddCircleFilled(center, 1.0f, IM_COL32(255, 255, 255, 255));
-                    }
+                float r = static_cast<float>(params.width) / maxWinTexWidth;
+
+                std::string format;
+                {  
+                    std::ostringstream ss;
+                    ss << params.width << "x" << params.height;
+                    format = ss.str();
                 }
 
-                draw_list->PushClipRect(canvas_p0, canvas_p1, true);
-            }*/
+                if(ImGui::SliderFloat("num. pixels", &r, 0.0, 1.0f, format.c_str()))
+                {
+                    params.width = std::max(1, static_cast<int>(static_cast<float>(maxWinTexWidth) * r));
+                    params.height = std::max(1, static_cast<int>(static_cast<float>(maxWinTexHeight) * r));
+                    
+                    ssaa.setSize(params.width, params.height);
+                    rect.setRenderSize(params.width, params.height);
+                    
+                    // On est obligé de ré-allouer le PBO, mais cela devrait être relativement rapide
+                    pbo.resize(params.width, params.height);
+                }
+
+
+                ImGui::TextColored(ImVec4(0, 1, 0, 1), "Num. pixels max: %dx%d Current: %dx%d (%d%%) ",
+                    maxWinTexWidth, maxWinTexHeight,
+                    params.width, params.height,
+                    static_cast<int>(r * 100.0f));
+
+                ImGui::Separator();
+                
+                {
+                    const int fps = static_cast<int>(1000.0 / frameTimeMillis);
+                    ImGui::TextColored(ImColor::HSV(0.3f, 0.8f, 0.8f), "frame time: %.2lf ms (fps: %d)", frameTimeMillis, fps);
+                }
+
+                ImGui::TextColored(ImColor::HSV(0.2f, 0.8f, 0.8f), "interpolation time: %.2lf ms", performanceInfo.interpolationTimeInSeconds * 1000.0);
+
+                {
+                    const int numRays = params.ssaaParams.numRays();
+                    const size_t totNumRays = static_cast<size_t>(params.width) * params.height * numRays;
+                    ImGui::TextColored(ImColor::HSV(0.857f, 0.8f, 0.8f), "num. rays traced per frame: %dx%dx%d=%zu", params.width, params.height, numRays, totNumRays);
+                }
+            }
         }
         if(ImGui::CollapsingHeader("Debug"))
         {
             ImGui::Checkbox("ImGUI demo", &showDemoWindow);
-
-            {
-                ImGui::Text("frame time: %.2lf ms", frameTimeMillis);
-                ImGui::Text("interpolation time: %.2lf ms", performanceInfo.interpolationTimeInSeconds * 1000.0);
-            }
+        }
+        if(ImGui::CollapsingHeader("Build"))
+        {
+            ImGui::Text("Ray Tracer using OptiX");
+            ImGui::Text("sha1: %s", GIT_HEAD_SHA1);
+            ImGui::Text("date: %s", GIT_COMMIT_DATE_ISO8601);
+            ImGui::Text("tag: %s", GIT_DESCRIBE);
         }
     }
     ImGui::End();
+
+    m_ssaaPreview.draw();
 
     previousTime = currentTime;
 }

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Options.h"
 #include <cuda_runtime.h>
 #include <curand_kernel.h>
 
@@ -9,26 +10,30 @@
  */
 struct SsaaContext
 {
-    int2 numRays;
-
-    __device__ __host__ int flattenNumRays() const
+    SsaaOptions* options;
+    int numRays;
+    int numRaysSqrt;
+    
+    __device__ __host__ int2 id2D() const
     {
-        return numRays.x * numRays.y;
+        return {id % numRaysSqrt, id / numRaysSqrt};
+    }
+
+    __device__ __host__ int2 numRays2D() const
+    {
+        return {numRaysSqrt, numRaysSqrt};
+    }
+
+    void setNumRays(int numRays)
+    {
+        numRays = numRays;
+        numRaysSqrt = static_cast<int>(sqrt(static_cast<double>(numRays)));
     }
 
     /**
      * Varie entre [0;numRays).
      */
-    int2 id;
-
-    /**
-     * @return id mais on se considère en 1D
-     * Certains algorithmes n'ont pas besoin de la 2D (par ex. la version totalement aléatoire)
-     */
-    __device__ __host__ int flattenID() const
-    {
-        return id.y * numRays.x + id.x;
-    }
+    int id;
 
     /**
      * Donnée de sortie:

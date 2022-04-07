@@ -1,7 +1,7 @@
 #ifndef CAMERA_HPP
 #define CAMERA_HPP
 
-#include "helper_math.h"
+#include "core/cuda/math.h"
 #include "Transform.hpp"
 
 struct Camera
