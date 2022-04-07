@@ -569,6 +569,9 @@ int main(int argc, char **argv)
     CUstream stream = nullptr;
     CUDA_CHECK(cudaStreamCreate(&stream));
 
+    // Get the GPU infos
+    CUDA_CHECK(cudaGetDeviceProperties(&performanceInfo.deviceProps, 0));
+
     // ====== Créer la structure accélératrice = envoyer les géométries sur le GPU ======
 
     auto beginPoints = begin(points->getPoints());

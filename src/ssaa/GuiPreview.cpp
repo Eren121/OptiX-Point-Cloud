@@ -92,15 +92,15 @@ void SsaaGuiPreview::drawCanvas()
     draw_list.AddRect(canvas_p0, canvas_p1, IM_COL32(255, 255, 255, 255));
 
     const ImColor point_color(255, 255, 0, 255);
-    const ImColor pixel_color(0, 255, 0);
+    const ImColor line_color(0, 255, 0);
 
-    float point_radius = 1.0f; // unit: px
+    float point_radius; // unit: px
 
     // Pour mieux voir, on donne une taille de point qui dépend du nombre de pixels
     {
         const float px_size = min(canvas_sz.x, canvas_sz.y) / m_numPixels;
 
-        const float ratio = 50.0f; // cb. de points pour faire 1 pixel de long
+        const float ratio = 20.0f; // cb. de points pour faire 1 pixel de long
         point_radius = max(1.0f, px_size / ratio);
     }
     
@@ -124,7 +124,7 @@ void SsaaGuiPreview::drawCanvas()
                 p2.x = p1.x;
                 p2.y = canvas_p1.y;
 
-                draw_list.AddLine(p1, p2, pixel_color);
+                draw_list.AddLine(p1, p2, line_color);
             }
 
             // Horizontal lines
@@ -139,7 +139,7 @@ void SsaaGuiPreview::drawCanvas()
                 p2.x = canvas_p1.x;
                 p2.y = p1.y;
 
-                draw_list.AddLine(p1, p2, pixel_color);
+                draw_list.AddLine(p1, p2, line_color);
             }
         }
         // Draw all points

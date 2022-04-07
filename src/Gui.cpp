@@ -149,6 +149,27 @@ void Gui::draw(GuiArgs& args)
                     ImGui::TextColored(ImColor::HSV(0.857f, 0.8f, 0.8f), "num. rays traced per frame: %dx%dx%d=%zu", params.width, params.height, numRays, totNumRays);
                 }
             }
+
+            // Print some of the gpu info
+            {
+                const size_t kb = 1'000;
+                const size_t mb = kb * kb;
+                const size_t gb = kb * kb * kb;
+                
+                const cudaDeviceProp& props = performanceInfo.deviceProps;
+                ImGui::Separator();
+                ImGui::Text("Device name: %s", props.name);
+                ImGui::Text("Compute Capability: %d.%d", props.major, props.minor);
+                ImGui::Text("Global memory: %zuGB", props.totalGlobalMem / gb);
+                ImGui::Text("Shared memory: %zuKB", props.sharedMemPerBlock / kb);
+                ImGui::Text("Constant memory: %zuKB", props.totalConstMem / kb);
+                ImGui::Text("Block registers: %d", props.regsPerBlock);
+                ImGui::Text("Warp size: %d", props.warpSize);
+                ImGui::Text("Threads per block: %d", props.maxThreadsPerBlock);
+                ImGui::Text("Max block dimensions: %dx%dx%d", props.maxThreadsDim[0], props.maxThreadsDim[1], props.maxThreadsDim[2]);
+                ImGui::Text("Max grid dimensions: %dx%dx%d", props.maxGridSize[0], props.maxGridSize[1], props.maxGridSize[2]);
+        
+            }
         }
         if(ImGui::CollapsingHeader("Debug"))
         {

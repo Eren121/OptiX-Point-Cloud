@@ -76,6 +76,7 @@ struct TraversableHandleStorage {
 struct PerformanceInfo
 {
     double interpolationTimeInSeconds;
+    cudaDeviceProp deviceProps;
 };
 
 extern PerformanceInfo performanceInfo;
