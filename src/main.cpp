@@ -855,10 +855,14 @@ int main(int argc, char **argv)
                     params.width, params.height, depth
                 ));
 
-                glBindTexture(GL_TEXTURE_2D, rect->getTexture());
-                glBindBuffer(GL_PIXEL_UNPACK_BUFFER, pbo.id());
-                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, params.width, params.height, 0, GL_RGB, GL_UNSIGNED_BYTE, 0);
-                glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+                // On travaille en RGB (3 bytes), or par défaut OpenGL fonctionne avec 4 bytes
+                // Demande à travailler sur des muliples de 1 (donc n'importe quel nombre dont 3)
+                GL_CHECK(glPixelStorei(GL_UNPACK_ALIGNMENT, 1));
+                
+                GL_CHECK(glBindTexture(GL_TEXTURE_2D, rect->getTexture()));
+                GL_CHECK(glBindBuffer(GL_PIXEL_UNPACK_BUFFER, pbo.id()));
+                GL_CHECK(glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, params.width, params.height, GL_RGB, GL_UNSIGNED_BYTE, 0));
+                GL_CHECK(glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0));
 
                 pbo.unmap(stream);
             }
