@@ -8,6 +8,7 @@
 #include "ssaa/SuperSampling.h"
 #include "core/cuda/Pbo.h"
 #include "SimpleGLRect.hpp"
+#include "PointsCloud.hpp"
 
 struct GuiArgs
 {
@@ -19,6 +20,7 @@ struct GuiArgs
     SuperSampling* ssaa;
     SimpleGLRect* rect;
     Pbo* pbo; // ID du PBO OpenGL
+    PointsCloud* points;
 };
 
 /**

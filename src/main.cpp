@@ -536,7 +536,8 @@ int main(int argc, char **argv)
 
     // ===== Chargement du nuage de points
 
-    const char* path = R"(../../data/bunny/reconstruction/bun_zipper.ply)";
+    //const char* path = R"(../../data/bunny/reconstruction/bun_zipper.ply)";
+    const char* path = PLY_PATH;
     points = std::make_unique<PointsCloud>(path);
     //points->randomizeColors();
     // ====== Initialisation ======
@@ -765,7 +766,8 @@ int main(int argc, char **argv)
                 args.ssaa = &ssaa;
                 args.rect = rect.get();
                 args.pbo = &pbo;
-                
+                args.points = points.get();
+
                 gui.draw(args);
             }
 

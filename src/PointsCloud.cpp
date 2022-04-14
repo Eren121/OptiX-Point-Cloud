@@ -22,6 +22,8 @@ std::vector<T> convertPlyDataToVector(PlyData& data)
 
 void PointsCloud::readPlyFile(const std::string & filepath, const bool preload_into_memory)
 {
+    m_path = {};
+
     // Source:
     // https://github.com/ddiakopoulos/tinyply/blob/master/source/example.cpp
 
@@ -88,7 +90,7 @@ void PointsCloud::readPlyFile(const std::string & filepath, const bool preload_i
         if (colors)     std::cout << "\tRead " << colors->count << " total vertex colors " << std::endl;
         if (radius)     std::cout << "\tRead " << radius->count << " radius " << std::endl;
 
-        m_points.resize(vertices->count);
+        m_points = {};
 
         std::optional<std::vector<float3>> v_vertices;
         std::optional<std::vector<float3>> v_normales;
@@ -106,6 +108,7 @@ void PointsCloud::readPlyFile(const std::string & filepath, const bool preload_i
 
             if(v_vertices) {
                 p.pos = (*v_vertices)[i];
+                //std::cout << p.pos.x << "," << p.pos.y << "," << p.pos.z << std::endl;
             }
 
             if(v_normales) {
@@ -117,7 +120,7 @@ void PointsCloud::readPlyFile(const std::string & filepath, const bool preload_i
             // on donne une couleur blanc par défaut
             
             if(v_colors) {
-                p.col = (*v_colors)[i];
+                p.col = make_uchar3(rand(), rand(), rand());
             }
             else {
                 p.col = make_uchar3(rand(), rand(), rand());
@@ -126,14 +129,19 @@ void PointsCloud::readPlyFile(const std::string & filepath, const bool preload_i
             if(v_radius) {
                 p.r = (*v_radius)[i];
                 p.r *= 0.0009f;
+                //p.r = 1.0f;
+                //p.r *= 0.0009f;
                 //p.r *= SCALE;
                 //p.r = 0.0001f;
             }
             //p.r = 0.0003f * SCALE;
 
             // On sait que l'indice i existe car on a effectué m_points.resize()
-            m_points[i] = p;
+            m_points.push_back(p);
+            //std::cout << p.pos.x << ","<<p.pos.y<<","<<p.pos.z<<std::endl;
         }
+
+        m_path = filepath;
     }
     catch (const std::exception & e)
     {

@@ -11,9 +11,13 @@ project(TestOptiX LANGUAGES CXX CUDA)
     set(BUILD_TESTS OFF)
     set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -DDEBUG") # définir la macro DEBUG en mode Debug
     set(SRC_DIR "${PROJECT_SOURCE_DIR}/src/")
-
     find_package(CUDA REQUIRED)
     include_directories("C:/ProgramData/NVIDIA Corporation/OptiX SDK 7.4.0/include")
+
+# User options (here we define default values only)
+
+    set(PLY_PATH "${PROJECT_SOURCE_DIR}/data/bunny/reconstruction/bun_zipper.ply" CACHE FILEPATH "Path of the points cloud model")
+    set(OPTIMIZE_SUPERSAMPLE 1 CACHE BOOL "Use custom kernel for interpolation")
 
 # Bibliothèques
 
@@ -63,6 +67,16 @@ project(TestOptiX LANGUAGES CXX CUDA)
     target_compile_definitions(commonLib PUBLIC NOMINMAX) # évite une erreur de compilation sur windows
     target_compile_definitions(commonLib PUBLIC MY_PTX_PATH=\"ray.ptx\")
     target_link_libraries(commonLib PUBLIC imgui glfw glad tinyply glm ${CUDA_LIBRARIES})
+
+    # Passage des options CMake en Macro C++
+
+    target_compile_definitions(commonLib PUBLIC PLY_PATH=\"${PLY_PATH}\")
+
+    if(OPTIMIZE_SUPERSAMPLE)
+        target_compile_definitions(commonLib PUBLIC OPTIMIZE_SUPERSAMPLE=1)
+    else()
+        target_compile_definitions(commonLib PUBLIC OPTIMIZE_SUPERSAMPLE=0)
+    endif()
 
 # Exécutable
     

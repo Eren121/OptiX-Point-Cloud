@@ -8,8 +8,6 @@
 
 #include "ssaa/Parameters.h"
 
-#define OPTIMIZE_SUPERSAMPLE 0
-
 // Différence entre la taille de la fenêtre sur le bureau
 // Et la taille interne de la fenêtre:
 // Pour rendre les calculs plus rapides, on stocke moins de pixels

@@ -18,6 +18,8 @@ public:
 
     size_t size() const { return m_points.size(); }
 
+    const std::string& path() const { return m_path; }
+    
     /**
      * Assigne à chaque point une couleur aléatoire
      */
@@ -27,6 +29,7 @@ private:
     void readPlyFile(const std::string & filepath, const bool preload_into_memory = true);
 
 private:
+    std::string m_path;
     std::vector<Point> m_points;
 };
 

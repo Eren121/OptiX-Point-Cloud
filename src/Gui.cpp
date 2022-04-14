@@ -10,6 +10,19 @@
 #include <string>
 #include "git.h"
 
+static void HelpMarker(const char* desc)
+{
+    ImGui::TextDisabled("(?)");
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::BeginTooltip();
+        ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+        ImGui::TextUnformatted(desc);
+        ImGui::PopTextWrapPos();
+        ImGui::EndTooltip();
+    }
+}
+
 void Gui::draw(GuiArgs& args)
 {
     Params& params = *args.params;
@@ -17,6 +30,7 @@ void Gui::draw(GuiArgs& args)
     SuperSampling& ssaa = *args.ssaa;
     SimpleGLRect& rect = *args.rect;
     Pbo& pbo = *args.pbo;
+    PointsCloud& points = *args.points;
 
 
     ///////////// Custom style
@@ -49,6 +63,9 @@ void Gui::draw(GuiArgs& args)
             // On laisse un peu de marge pour montrer que ça ne change pas si > sqrt(3)
             // La couleur peut changer quand même un peu à cause du calcul comme Phong et les vecteurs associés calculés
             ImGui::SliderFloat("point radius", &params.pointRadiusModifier, 0.0f, sqrt(3.0f) * 1.2f);
+
+            ImGui::Text("num. points: %d", points.size());
+            ImGui::Text("model path: '%s'", points.path().c_str());
         }
 
         if(ImGui::CollapsingHeader("Lumière"))
@@ -148,6 +165,11 @@ void Gui::draw(GuiArgs& args)
                     const size_t totNumRays = static_cast<size_t>(params.width) * params.height * numRays;
                     ImGui::TextColored(ImColor::HSV(0.857f, 0.8f, 0.8f), "num. rays traced per frame: %dx%dx%d=%zu", params.width, params.height, numRays, totNumRays);
                 }
+
+                {
+                    const char* is_on = OPTIMIZE_SUPERSAMPLE ? "ON" : "OFF";
+                    ImGui::Text("Use custom kernel for interpolation: %s", is_on);
+                }
             }
 
             // Print some of the gpu info
@@ -180,7 +202,15 @@ void Gui::draw(GuiArgs& args)
             ImGui::Text("Ray Tracer using OptiX");
             ImGui::Text("sha1: %s", GIT_HEAD_SHA1);
             ImGui::Text("date: %s", GIT_COMMIT_DATE_ISO8601);
-            ImGui::Text("tag: %s", GIT_DESCRIBE);
+            ImGui::Text("description: %s", GIT_DESCRIBE);
+            ImGui::SameLine(); HelpMarker("Usually the most recent tag");
+            ImGui::Text("is_dirty: %s", GIT_IS_DIRTY ? "YES" : "NO");
+
+            if(GIT_IS_DIRTY)
+            {
+                const ImVec4 color = {1.0f, 0.1f, 0.1f, 1.0f};
+                ImGui::TextColored(color, "CAUTIOUS: build is dirty, build info. may be outdated");
+            }
         }
     }
     ImGui::End();
