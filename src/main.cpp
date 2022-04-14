@@ -36,6 +36,13 @@ std::string readAllFile(const char *path)
     using iterator = std::istreambuf_iterator<char>;
     
     std::ifstream ifs(path);
+
+    if(!ifs)
+    {
+        std::cerr << "Error: cannot read file " << path << std::endl;
+        std::exit(1);
+    }
+
     std::string content{(iterator(ifs)), iterator()};
     return content;
 }
