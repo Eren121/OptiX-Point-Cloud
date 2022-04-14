@@ -66,6 +66,29 @@ void Gui::draw(GuiArgs& args)
 
             ImGui::Text("num. points: %d", points.size());
             ImGui::Text("model path: '%s'", points.path().c_str());
+
+            // Print a specific point coords (useful for debugging)
+
+            {
+                static int pointID = 0;
+                ImGui::SliderInt("Fetch specific point", &pointID, 0, static_cast<int>(points.size()));
+                ImGui::SameLine(); HelpMarker("CTRL+click to input a value");
+
+                const Point& point = points.getPoints()[pointID];
+
+                float3 pos = point.pos;
+                float3 nor = point.nor;
+                float r = point.r;
+                int3 col = make_int3(point.col.x, point.col.y, point.col.z);
+
+                const ImGuiInputTextFlags flags = ImGuiInputTextFlags_ReadOnly;
+                ImGui::BeginDisabled();
+                ImGui::InputFloat3("Point position", &pos.x, "%.3f", flags);
+                ImGui::InputFloat3("Point normal", &nor.x, "%.3f", flags);
+                ImGui::InputInt3("Point color", &col.x, flags);
+                ImGui::InputFloat("Point radius", &r, 0.0f, 0.0f, "%.3f", flags);
+                ImGui::EndDisabled();
+            }
         }
 
         if(ImGui::CollapsingHeader("Lumière"))
