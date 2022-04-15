@@ -7,25 +7,21 @@ Projet de Master 2
 
 ## But du projet
 
-Ce projet a plusieurs buts. Premièrement, le principal objectif est de pouvoir visualiser des *nuages de points* et les afficher grâce au *ray tracing*. Ensuite, il s'agit d'expérimenter la bibliothèque de ray tracing **OptiX** de NVidia et d'en expliquer les différents concepts. Ce projet pourra ensuite être utilisé de différentes façons : une démo pour comprendre l'utilisation de la bibliothèque, ou une base applicative pour pouvoir être adapté pour faire étudier le ray tracing à d'autres étudiants. Enfin, il s'agit de mesure les performances du rendu pour pouvoir les comparer à une nouvelle méthode de rendu qui a été développée dans le laboratoire.
+Ce projet a plusieurs buts. Premièrement, le principal objectif est de pouvoir visualiser des *nuages de points* et les afficher grâce au *ray tracing*. Ensuite, il s'agit d'expérimenter la bibliothèque de ray tracing **OptiX** de NVidia. Ce projet pourra ensuite être utilisé de différentes façons : une démo pour comprendre l'utilisation de la bibliothèque, ou une base applicative pour pouvoir être adapté pour faire étudier le ray tracing à d'autres étudiants. Enfin, le dernier objectif est de mesurer les performances pour pouvoir les comparer à une nouvelle méthode de rendu qui a été développée par le laboratoire.
 
 ## Travail effectué
 
-Un travail de veille a été effectué sur le *ray tracing* et les différents concepts l'entourant, comme l'anti-aliasing. J'ai essayé de comprendre au mieux l'API qui est assez difficile à appréhender car certains concepts sont très bas-niveaux et il faut une bonne quantité de code avant d'avoir quelque chose de fonctionnel. J'ai ainsi créé une *démo* utilisant cet API et les concepts l'entourant vont être simplement présentés ici.
-
-Le but de ce rapport est de fournit une sorte de *tutoriel* ou au moins une introduction à OptiX. Vu la complexité de l'API, les concepts seront expliqués le plus simplement possible avec peut-être des imprécisions (et parce que je ne comprends pas tout). 
+Un travail de veille a été effectué sur le *ray tracing* et les différents concepts l'entourant, comme l'anti-aliasing. J'ai essayé de comprendre au mieux l'API qui est assez difficile à appréhender car certains concepts sont très bas-niveaux et il faut une certaine quantité de code *boilerplate* avant d'avoir quelque chose de fonctionnel. J'ai ainsi créé une *démo* utilisant cet API et les concepts l'entourant. Vu la complexité de l'API, les concepts seront expliqués le plus simplement possible avec des simplifications, et peut-être des imprécisions. Résultat final :
 
 ![](img/final_app.png)
 
-Résultat final
-
 ## Matériel
 
-Le programme a a été testé sur une *RTX A4000* ainsi qu'une *GTX 1050 Ti*. Il est en effet possible d'utiliser des cartes non-RTX avec OptiX. Ces cartes ne sont cependant pas optimisées pour et le temps de rendu est beaucoup plus long.
+Le programme a été testé sur deux matériels différents. Une **RTX A4000** ainsi qu'une **GTX 1050 Ti**. Il est en effet possible d'utiliser des cartes non-RTX avec OptiX. Ces cartes ne sont cependant pas optimisées pour et le temps de rendu est donc beaucoup plus long.
 
 # Ray tracing
 
-Le lancer de rayons ou **ray tracing** est une méthode de rendu alternative à la **rastérisation** (comme OpenGL). Il s'agit de simuler les rayons de lumière *à l'envers*, c'est-à-dire en partant de la caméra. Cela permet un rendu beaucoup plus réaliste et une implémentation des effets beaucoup plus simple. Méthode existant depuis des dizaines d'années, mais qualifiée d'inutilisable car les GPUs de l'époque de ne permettaient pas son rendu en temps réel. Jusqu'à aujourd'hui notamment grâce à la génération RTX de NVidia, la première génération optimisant cette méthode avec un hardware dédié.
+Le lancer de rayons ou **ray tracing** est une méthode de rendu alternative à la **rastérisation** (comme OpenGL). Il s'agit de simuler les rayons de lumière. En ray tracing, on les simule *à l'envers*, c'est-à-dire en partant de la caméra plutôt que de la source de lumière, économisant ainsi le calcul de nombreux rayons qui ne toucheraient pas la caméra. Cela permet un rendu beaucoup plus réaliste et une implémentation des effets beaucoup plus simple. Méthode existant depuis des dizaines d'années, mais qualifiée d'inutilisable car les GPUs de l'époque de ne permettaient pas son rendu en temps réel. Jusqu'à aujourd'hui notamment grâce à la génération RTX de NVidia, la première génération optimisant cette méthode avec un hardware dédié.
 
 On considère une image de taille $(w_\text{i},h_\text{i})$. On lancera un rayon par pixel par image, soit $w_i \times h_i$ en tout ce qui correspond à 2M de rayons pour du full HD $1920 \times 1080$. Le rayon de chaque pixel $r_{i,j}$ aura pour origine la position dans le monde $P_r=(x_r,y_r,z_r)$ et sera tiré dans une direction $N_r=(n_{x,r},n_{y,r},n_{z,r})$ qui dépendront de la caméra. En fait, un rayon n'est ni plus ni moins qu'une *demi-droite*. 
 
