@@ -1,6 +1,9 @@
-cmake_minimum_required(VERSION 3.1 FATAL_ERROR)
+cmake_minimum_required(VERSION 3.18 FATAL_ERROR)
 
-project(TestOptiX LANGUAGES CXX CUDA)
+project(TestOptiX LANGUAGES CUDA CXX C)
+
+find_package(CUDAToolkit REQUIRED)
+include_directories(${CUDA_TOOLKIT_ROOT_DIR}/include)
 
 # Options globales
 
@@ -12,7 +15,7 @@ project(TestOptiX LANGUAGES CXX CUDA)
     set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -DDEBUG") # définir la macro DEBUG en mode Debug
     set(SRC_DIR "${PROJECT_SOURCE_DIR}/src/")
     find_package(CUDA REQUIRED)
-    include_directories("C:/ProgramData/NVIDIA Corporation/OptiX SDK 7.4.0/include")
+    include_directories("${OptiX_INSTALL_DIR}/include")
 
 # User options (here we define default values only)
 
@@ -134,8 +137,7 @@ project(TestOptiX LANGUAGES CXX CUDA)
     add_custom_command(
         TARGET ${EXE} POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E
-            echo ">>> Copy shaders files:" $<TARGET_OBJECTS:shadersLib> "to executable directory ($<TARGET_FILE_DIR:${EXE}>)")
-
+            echo "\">>> Copy shaders files: $<TARGET_OBJECTS:shadersLib> to executable directory ($<TARGET_FILE_DIR:${EXE}>)\"")
     # Copie
     add_custom_command(
         TARGET ${EXE} POST_BUILD

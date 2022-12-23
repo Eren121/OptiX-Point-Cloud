@@ -3,6 +3,7 @@
 #include <fstream>
 #include <vector>
 #include <algorithm>
+#include <memory>
 #include <cuda_runtime.h> // On est pas dans un .cu sinon c'est inclus automatiquement
 #include <optix.h>
 #include <optix_stubs.h>
@@ -352,11 +353,11 @@ TraversableHandleStorage createAccelerationStructure(OptixDeviceContext context,
     // Création & passage des vertices sur le GPU
     // d_vertices doit être aligné sur 4-bytes (peut importe car cudaMalloc aligne toujours sur 256-bytes)
     CUdeviceptr d_vertices = 0;
-    CUDA_CHECK(cudaMalloc(&reinterpret_cast<void*>(d_vertices), sizeof(vertices)));
+    CUDA_CHECK(cudaMalloc(&reinterpret_cast<void*&>(d_vertices), sizeof(vertices)));
     CUDA_CHECK(cudaMemcpy(reinterpret_cast<void*>(d_vertices), vertices, sizeof(vertices), cudaMemcpyHostToDevice));
 
     CUdeviceptr d_indices = 0;
-    CUDA_CHECK(cudaMalloc(&reinterpret_cast<void*>(d_indices), sizeof(indices)));
+    CUDA_CHECK(cudaMalloc(&reinterpret_cast<void*&>(d_indices), sizeof(indices)));
     CUDA_CHECK(cudaMemcpy(reinterpret_cast<void*>(d_indices), indices, sizeof(indices), cudaMemcpyHostToDevice));
 
     // Convertit le vecteur de points en vecteur de AABB
@@ -468,7 +469,7 @@ TraversableHandleStorage createAccelerationStructure(OptixDeviceContext context,
     // Maintenant que l'on a la taille, on peut allouer les données
     // output et temp doivent être alignés sur 128-bytes (peu importe car cudaMalloc() aligne toujours sur 256-bytes)
     outputHandle.d_storage = managed_device_ptr(bufferSizes.outputSizeInBytes);
-    CUDA_CHECK(cudaMalloc(&reinterpret_cast<void*>(d_temp), bufferSizes.tempSizeInBytes));
+    CUDA_CHECK(cudaMalloc(&reinterpret_cast<void*&>(d_temp), bufferSizes.tempSizeInBytes));
 
     std::cout << "accel_mem_size=" << bufferSizes.outputSizeInBytes << " bytes" << std::endl;
     std::cout << "accel_mem_size_temp=" << bufferSizes.tempSizeInBytes << " bytes" << std::endl;

@@ -1,5 +1,6 @@
 #include "Scene.hpp"
 #include "common.hpp"
+#include <cstring>
 
 namespace
 {
